@@ -1,0 +1,32 @@
+[Unit]
+Description=quran-live control panel
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/quran-live
+# Loopback only. The panel starts and stops live broadcasts and writes into the
+# asset pools, so it is reached over an SSH tunnel rather than exposed:
+#   ssh -N -L 8770:127.0.0.1:8770 <host>
+Environment=QURAN_WEB_HOST=127.0.0.1
+Environment=QURAN_WEB_PORT=8770
+ExecStart=/usr/bin/python3 %h/quran-live/web/server.py
+Restart=always
+RestartSec=5
+
+# It yields to the streams and to the other apps on this box, same as they do.
+Nice=15
+CPUWeight=10
+MemoryMax=256M
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+# It must write uploads into assets/ as well as the runtime directories.
+ReadWritePaths=%h/quran-live/assets %h/quran-live/cache %h/quran-live/state %h/quran-live/logs %h/quran-live/data
+
+[Install]
+WantedBy=default.target

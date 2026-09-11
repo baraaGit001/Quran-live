@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>quran-live</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0d1117; --panel: #161b22; --line: #262d36;
+    --ink: #e6edf3; --dim: #8b949e;
+    --accent: #2f9e63; --accent-dim: #1c5f3c;
+    --warn: #d29922; --bad: #d9534f;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.6 system-ui, "Segoe UI", Tahoma, sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 5;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 12px 18px; background: #0d1117ee; backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  .grow { flex: 1; }
+  .disk { font-size: 12px; color: var(--dim); }
+  main { padding: 18px; max-width: 1100px; margin: 0 auto; display: grid; gap: 18px; }
+  section {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius); overflow: hidden;
+  }
+  section > h2 {
+    margin: 0; padding: 11px 16px; font-size: 13px; font-weight: 600;
+    color: var(--dim); border-bottom: 1px solid var(--line);
+    text-transform: uppercase; letter-spacing: .6px;
+  }
+  .body { padding: 14px 16px; }
+
+  .chan { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .chan:last-child { border-bottom: 0; }
+  .chan-top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .chan-name { font-weight: 600; }
+  .chan-title { color: var(--dim); font-size: 13px; }
+  .meta { margin: 6px 0 10px; font-size: 12px; color: var(--dim); }
+  .meta code { background: #0d1117; padding: 1px 6px; border-radius: 5px; }
+
+  button {
+    font: inherit; font-size: 13px; cursor: pointer;
+    background: #21262d; color: var(--ink);
+    border: 1px solid var(--line); border-radius: 7px;
+    padding: 5px 12px; transition: .12s;
+  }
+  button:hover:not(:disabled) { border-color: #3d4753; background: #2a313a; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.go { background: var(--accent-dim); border-color: var(--accent); }
+  button.danger { color: var(--bad); }
+  .row { display: flex; gap: 7px; flex-wrap: wrap; }
+
+  pre {
+    margin: 0; padding: 12px 14px; background: #0d1117;
+    border: 1px solid var(--line); border-radius: 8px;
+    font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+    white-space: pre-wrap; word-break: break-word;
+    max-height: 300px; overflow: auto; direction: ltr; text-align: left;
+  }
+
+  .tabs { display: flex; gap: 6px; padding: 12px 16px 0; flex-wrap: wrap; }
+  .tabs button[aria-selected="true"] { background: var(--accent-dim); border-color: var(--accent); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: right; padding: 7px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--dim); font-weight: 500; font-size: 12px; }
+  td.file { direction: ltr; text-align: left; font-family: ui-monospace, Menlo, monospace; font-size: 12px; word-break: break-all; }
+  td.num { color: var(--dim); white-space: nowrap; }
+  tbody tr:last-child td { border-bottom: 0; }
+
+  .drop {
+    margin-top: 12px; padding: 18px; text-align: center;
+    border: 1px dashed #3d4753; border-radius: 8px; color: var(--dim);
+    transition: .12s;
+  }
+  .drop.hot { border-color: var(--accent); color: var(--ink); background: #1c5f3c22; }
+  .drop input { display: none; }
+  .bar { height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; margin-top: 10px; }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+
+  .cache { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+  .cache div { background: #0d1117; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .cache b { display: block; font-size: 15px; font-weight: 600; }
+  .cache span { font-size: 11px; color: var(--dim); }
+
+  .job { margin-bottom: 10px; }
+  .job h3 { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-left: 6px; }
+  .dot.run { background: var(--warn); animation: pulse 1.2s infinite; }
+  .dot.ok { background: var(--accent); }
+  .dot.bad { background: var(--bad); }
+  @keyframes pulse { 50% { opacity: .25; } }
+
+  #toast {
+    position: fixed; bottom: 16px; left: 16px; z-index: 20;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 10px 14px; max-width: min(460px, 90vw);
+    box-shadow: 0 8px 28px #0008; display: none;
+    direction: ltr; text-align: left; font-size: 13px;
+  }
+  #toast.bad { border-color: var(--bad); }
+  .empty { color: var(--dim); padding: 6px 0; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>quran-live</h1>
+  <span class="disk" id="disk"></span>
+  <span class="grow"></span>
+  <button id="refresh">تحديث</button>
+</header>
+
+<main>
+  <section>
+    <h2>القنوات</h2>
+    <div id="channels"><div class="body empty">…</div></div>
+  </section>
+
+  <section>
+    <h2>الحالة</h2>
+    <div class="body"><pre id="status">…</pre></div>
+  </section>
+
+  <section id="jobs-sec" hidden>
+    <h2>عمليات جارية</h2>
+    <div class="body" id="jobs"></div>
+  </section>
+
+  <section>
+    <h2>الميديا</h2>
+    <div class="tabs" id="tabs"></div>
+    <div class="body">
+      <div id="media"></div>
+      <label class="drop" id="drop">
+        <input type="file" id="file" multiple>
+        اسحب الملفات هنا أو اضغط للاختيار
+        <div class="bar"><i id="prog"></i></div>
+      </label>
+      <p class="meta" id="uphint"></p>
+    </div>
+  </section>
+
+  <section>
+    <h2>الكاش</h2>
+    <div class="body"><div class="cache" id="cache"></div></div>
+  </section>
+
+  <section>
+    <h2>السجلّ</h2>
+    <div class="body">
+      <div class="row" id="logbtns"></div>
+      <pre id="logs" style="margin-top:12px">اختر قناة</pre>
+    </div>
+  </section>
+</main>
+
+<div id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const TOKEN = new URLSearchParams(location.search).get("token") || "";
+
+// Every action here restarts a broadcast or writes into the pools, so failures
+// are shown rather than swallowed into a silent no-op.
+async function api(path, opts = {}) {
+  const o = { ...opts, headers: { ...(opts.headers || {}), ...(TOKEN ? { "X-Token": TOKEN } : {}) } };
+  const r = await fetch(path, o);
+  const body = await r.json().catch(() => ({ error: r.statusText }));
+  if (!r.ok) throw new Error(body.error || r.statusText);
+  return body;
+}
+
+let toastTimer;
+function toast(msg, bad = false) {
+  const t = $("#toast");
+  t.textContent = String(msg).trim().slice(0, 600) || (bad ? "failed" : "done");
+  t.className = bad ? "bad" : "";
+  t.style.display = "block";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (t.style.display = "none"), bad ? 9000 : 4000);
+}
+
+const fmt = n => {
+  if (!n) return "0 B";
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.min(u.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
+  return (n / 1024 ** i).toFixed(i ? 1 : 0) + " " + u[i];
+};
+
+const KINDS = { audio: "تلاوات", images: "صور", videos: "فيديو", fonts: "خطوط" };
+const ACCEPT = {
+  audio: ".mp3,.m4a,.ogg,.opus,.wav,.flac",
+  images: ".jpg,.jpeg,.png,.webp",
+  videos: ".mp4,.mkv,.mov,.webm",
+  fonts: ".ttf,.otf",
+};
+let kind = "audio";
+let state = { media: {}, channels: [] };
+let logChannel = null;
+
+function renderChannels(chs) {
+  const box = $("#channels");
+  if (!chs.length) { box.innerHTML = '<div class="body empty">لا توجد قنوات في channels/</div>'; return; }
+  box.innerHTML = chs.map(c => `
+    <div class="chan">
+      <div class="chan-top">
+        <span class="chan-name">${c.name}</span>
+        <span class="chan-title">${c.title || ""}</span>
+      </div>
+      <div class="meta">
+        <code>${c.audio_dir || "—"}</code> · <code>${c.visual_dir || "—"}</code>
+        ${c.platform ? " · " + c.platform : ""}${c.enabled ? "" : " · معطّلة"}
+      </div>
+      <div class="row">
+        <button class="go" data-ch="${c.name}" data-act="start">تشغيل</button>
+        <button data-ch="${c.name}" data-act="stop">إيقاف</button>
+        <button data-ch="${c.name}" data-act="restart">إعادة</button>
+        <button data-ch="${c.name}" data-act="validate">فحص</button>
+        <button data-ch="${c.name}" data-act="sync">مزامنة التوقيتات</button>
+        <button data-ch="${c.name}" data-act="build">بناء المسارات</button>
+      </div>
+    </div>`).join("");
+}
+
+function renderJobs(jobs) {
+  const sec = $("#jobs-sec");
+  if (!jobs || !jobs.length) { sec.hidden = true; return; }
+  sec.hidden = false;
+  $("#jobs").innerHTML = jobs.map(j => {
+    const cls = j.running ? "run" : j.code === 0 ? "ok" : "bad";
+    const label = j.running ? "جارٍ" : j.code === 0 ? "تم" : "فشل (" + j.code + ")";
+    return `<div class="job"><h3>${j.cmd} <span class="dot ${cls}"></span><span class="chan-title"> ${label}</span></h3>
+      <pre>${(j.tail || "").replace(/[<&]/g, m => ({ "<": "&lt;", "&": "&amp;" }[m])) || "…"}</pre></div>`;
+  }).join("");
+}
+
+function renderMedia() {
+  $("#tabs").innerHTML = Object.entries(KINDS).map(([k, label]) =>
+    `<button data-kind="${k}" aria-selected="${k === kind}">${label} (${(state.media[k] || []).length})</button>`).join("");
+
+  const items = state.media[kind] || [];
+  $("#media").innerHTML = items.length ? `
+    <table><thead><tr><th>الملف</th><th>الحجم</th><th></th></tr></thead><tbody>
+    ${items.map(f => `<tr>
+      <td class="file">${f.name}</td>
+      <td class="num">${fmt(f.size)}</td>
+      <td style="text-align:left"><button class="danger" data-del="${encodeURIComponent(f.name)}">حذف</button></td>
+    </tr>`).join("")}
+    </tbody></table>` : '<div class="empty">لا ملفات</div>';
+
+  $("#file").setAttribute("accept", ACCEPT[kind]);
+  $("#uphint").textContent = kind === "audio"
+    ? "سمِّ الملف برقم السورة (018.mp3) لتُطابَق الآيات تلقائيًا. ارفع داخل مجلد الشيخ بكتابة اسمه قبل الملف."
+    : "المسموح: " + ACCEPT[kind];
+}
+
+function renderLogButtons(chs) {
+  $("#logbtns").innerHTML = chs.map(c =>
+    `<button data-log="${c.name}" aria-selected="${c.name === logChannel}">${c.name}</button>`).join("")
+    || '<span class="empty">—</span>';
+}
+
+async function load() {
+  try {
+    state = await api("/api/state");
+  } catch (e) { toast(e.message, true); return; }
+  renderChannels(state.channels);
+  renderLogButtons(state.channels);
+  $("#status").textContent = state.status || "—";
+  renderJobs(state.jobs);
+  renderMedia();
+  const d = state.disk || {};
+  $("#disk").textContent = d.total ? `القرص: ${fmt(d.free)} متاح من ${fmt(d.total)}` : "";
+  $("#cache").innerHTML = Object.entries(state.cache || {}).sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => `<div><b>${fmt(v)}</b><span>${k}</span></div>`).join("") || '<div class="empty">فارغ</div>';
+}
+
+// -- actions ---------------------------------------------------------------
+document.addEventListener("click", async e => {
+  const b = e.target.closest("button");
+  if (!b) return;
+
+  if (b.dataset.kind) { kind = b.dataset.kind; renderMedia(); return; }
+
+  if (b.dataset.log) {
+    logChannel = b.dataset.log;
+    renderLogButtons(state.channels);
+    $("#logs").textContent = "…";
+    try {
+      const r = await api(`/api/logs/${logChannel}?n=200`);
+      $("#logs").textContent = r.output || "(فارغ)";
+    } catch (err) { $("#logs").textContent = err.message; }
+    return;
+  }
+
+  if (b.dataset.act) {
+    const { ch, act } = b.dataset;
+    // build re-encodes every track and can run for hours; make it deliberate.
+    if (act === "build" && !confirm(`بناء مسارات ${ch}؟ قد يستغرق ساعات.`)) return;
+    b.disabled = true;
+    try {
+      const r = await api(`/api/channel/${ch}/${act}`, { method: "POST" });
+      toast(r.started || r.output || "تم");
+      await load();
+    } catch (err) { toast(err.message, true); }
+    finally { b.disabled = false; }
+    return;
+  }
+
+  if (b.dataset.del) {
+    const name = decodeURIComponent(b.dataset.del);
+    if (!confirm(`حذف ${name}؟`)) return;
+    try {
+      const r = await api(`/api/media/${kind}/${b.dataset.del}`, { method: "DELETE" });
+      toast(r.note ? `${r.deleted} — ${r.note}` : r.deleted);
+      await load();
+    } catch (err) { toast(err.message, true); }
+    return;
+  }
+
+  if (b.id === "refresh") load();
+});
+
+// -- upload ----------------------------------------------------------------
+// Sent as a raw body rather than multipart: the server is http.server, and a
+// stream straight to disk avoids buffering a recitation in memory.
+function put(file) {
+  return new Promise((resolve, reject) => {
+    const folder = kind === "audio" ? (prompt(`مجلد الشيخ لـ ${file.name}`, "minshawi") || "").trim() : "";
+    if (kind === "audio" && !folder) return reject(new Error("لُغي"));
+    const path = `/api/media/${kind}/${folder ? encodeURIComponent(folder) + "/" : ""}${encodeURIComponent(file.name)}`;
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", path);
+    if (TOKEN) xhr.setRequestHeader("X-Token", TOKEN);
+    xhr.upload.onprogress = ev => {
+      if (ev.lengthComputable) $("#prog").style.width = (ev.loaded / ev.total * 100) + "%";
+    };
+    xhr.onload = () => {
+      let b = {}; try { b = JSON.parse(xhr.responseText); } catch {}
+      xhr.status < 400 ? resolve(b) : reject(new Error(b.error || xhr.statusText));
+    };
+    xhr.onerror = () => reject(new Error("فشل الرفع"));
+    xhr.send(file);
+  });
+}
+
+async function upload(files) {
+  for (const f of files) {
+    $("#prog").style.width = "0%";
+    try {
+      const r = await put(f);
+      toast(`${r.saved} — ${fmt(r.size)}`);
+    } catch (e) { toast(`${f.name}: ${e.message}`, true); }
+  }
+  $("#prog").style.width = "0%";
+  load();
+}
+
+$("#file").addEventListener("change", e => { upload(e.target.files); e.target.value = ""; });
+const drop = $("#drop");
+["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => {
+  e.preventDefault(); drop.classList.add("hot");
+}));
+["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => {
+  e.preventDefault(); drop.classList.remove("hot");
+}));
+drop.addEventListener("drop", e => { if (e.dataTransfer.files.length) upload(e.dataTransfer.files); });
+
+load();
+// Only to follow a running build or sync; idle polling would walk the whole
+// cache tree every few seconds for nothing.
+setInterval(() => { if (state.jobs && state.jobs.some(j => j.running)) load(); }, 5000);
+</script>
+</body>
+</html>

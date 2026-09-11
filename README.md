@@ -169,6 +169,39 @@ Common causes: stream key unset or rotated; no rendered tracks yet (run
 
 ---
 
+---
+
+## Control panel
+
+A small web page for the day-to-day work: start/stop channels, watch a build or
+sync run, and add or remove recitations and backgrounds without an SSH session.
+Standard library only -- no dependency to keep alive next to the two web apps.
+
+```bash
+python3 web/server.py                  # binds 127.0.0.1:8770
+ssh -N -L 8770:127.0.0.1:8770 <host>   # then open http://127.0.0.1:8770
+```
+
+Loopback by default **on purpose**: every button here spends CPU, writes into
+the asset pools or restarts a live broadcast. Binding elsewhere is refused
+unless `QURAN_WEB_TOKEN` is set, and even then a tunnel is the better answer --
+the panel speaks plain HTTP.
+
+Uploads are confined to the four asset pools and to a whitelist of suffixes,
+are written to a `.part` file and renamed (so a dropped connection never leaves
+a half file for the renderer), and are refused if they would take the disk
+below the same 10 GB floor the cache respects.
+
+`build` and `sync` outlive a request, so they run detached and the page polls
+their output rather than holding a connection open for an hour.
+
+Run it at boot like the channels:
+
+```bash
+cp systemd/quran-live-panel.service ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now quran-live-panel
+```
+
 ## Resource usage
 
 | | per channel | 5 channels |
