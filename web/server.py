@@ -14,6 +14,7 @@ here spends CPU, writes into the asset pools or restarts a live broadcast.
 
 from __future__ import annotations
 
+import hmac
 import json
 import mimetypes
 import os
@@ -22,6 +23,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse, parse_qs
@@ -45,6 +47,31 @@ MEDIA_KINDS = {
 MAX_UPLOAD = 2 * 1024 * 1024 * 1024
 
 TOKEN = os.environ.get("QURAN_WEB_TOKEN", "")
+
+# Failed-token tracking. Reachable from the internet, the token is the only
+# thing between a stranger and the broadcast controls, so guessing has to cost
+# something: after this many failures an address waits.
+FAIL_MAX = 8
+FAIL_WINDOW = 300.0
+_fails: dict[str, list[float]] = {}
+_fails_lock = threading.Lock()
+
+
+def _throttled(addr: str) -> bool:
+    now = time.time()
+    with _fails_lock:
+        hits = [t for t in _fails.get(addr, []) if now - t < FAIL_WINDOW]
+        _fails[addr] = hits
+        return len(hits) >= FAIL_MAX
+
+
+def _note_failure(addr: str) -> None:
+    now = time.time()
+    with _fails_lock:
+        _fails.setdefault(addr, []).append(now)
+        if len(_fails) > 1000:  # bounded; this is a small operator tool
+            for k in [k for k, v in _fails.items() if not v or now - v[-1] > FAIL_WINDOW]:
+                _fails.pop(k, None)
 
 # Long operations (build, sync) outlive a request, so they run detached and the
 # page polls this instead of holding a connection open for an hour.
@@ -242,10 +269,19 @@ class Handler(BaseHTTPRequestHandler):
     def _authed(self) -> bool:
         if not TOKEN:
             return True
+        addr = self.client_address[0]
+        if _throttled(addr):
+            return False
         sent = self.headers.get("X-Token", "")
         if not sent:
             sent = parse_qs(urlparse(self.path).query).get("token", [""])[0]
-        return sent == TOKEN
+        # Constant time: a plain == leaks the token prefix by prefix to anyone
+        # who can time the response.
+        if hmac.compare_digest(sent, TOKEN):
+            return True
+        _note_failure(addr)
+        sys.stderr.write("[panel] bad token from %s\n" % addr)
+        return False
 
     # -- routes -----------------------------------------------------------
     def do_GET(self):
