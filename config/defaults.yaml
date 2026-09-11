@@ -1,0 +1,53 @@
+# Defaults inherited by every channel. A channel file overrides only what it needs.
+# Tuned for a 2-OCPU ARM server with NO hardware video encoder: the video is
+# pre-encoded once and stream-copied, so these encode settings apply only to the
+# one-off pre-render, not to the 24/7 stream.
+
+video:
+  width: 1280
+  height: 720
+  fps: 30
+  # This content is a still (or near-still) background with text, which is
+  # exactly what H.264 compresses best -- 2 Mbps at 720p30 looks clean here
+  # where a fast-moving scene would not. It also matters at scale: the full
+  # mujawwad Quran is ~81 hours, so every extra Mbps is ~37 GB on disk.
+  bitrate: "2000k"
+  # How a source that is not 16:9 fills the frame: blur | crop | pad
+  fit: "blur"
+  # Seconds per still image when building a loop out of images.
+  image_duration: 20
+  # Keyframe interval in seconds. YouTube wants <= 4s; 2s reconnects faster.
+  keyframe_interval: 2
+
+audio:
+  bitrate: "128k"
+  sample_rate: 44100
+  channels: 2
+
+selection:
+  # Don't replay anything still inside the recent-history window.
+  history_size: 10
+  shuffle: true
+
+overlay:
+  enabled: true
+  font_size: 54
+  color: "#FFFFFF"
+  # Soft shadow keeps text legible over any background without a heavy box.
+  shadow: true
+  position: "bottom"
+  margin: 80
+
+stream:
+  # Seconds to wait before relaunching ffmpeg after it exits.
+  restart_delay: 5
+  # Give up and alert only after this many consecutive rapid failures.
+  max_rapid_failures: 10
+
+cache:
+  # Hard ceiling on rendered tracks. The full Quran at 2 Mbps is ~73 GB; this
+  # box has ~145 GB free and also runs two web apps, so the cache is bounded
+  # and evicts least-recently-used tracks rather than being trusted to behave.
+  max_gb: 60
+  # Never let the disk drop below this, whatever the cache limit says.
+  min_free_gb: 10

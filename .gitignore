@@ -1,0 +1,18 @@
+# Secrets
+.env
+
+# Generated media and runtime state -- all reproducible from the asset pools.
+cache/
+state/
+logs/
+vendor/
+
+# Content. Keep rights-bearing media out of git by default.
+assets/audio/*
+assets/visuals/images/*
+assets/visuals/videos/*
+assets/fonts/*
+!assets/**/.gitkeep
+
+__pycache__/
+*.pyc

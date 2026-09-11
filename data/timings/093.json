@@ -1,0 +1,71 @@
+{
+  "audio": "093.mp3",
+  "ayahs": [
+    {
+      "surah": 93,
+      "ayah": 1,
+      "start": 0.0,
+      "end": 18.823
+    },
+    {
+      "surah": 93,
+      "ayah": 2,
+      "start": 18.823,
+      "end": 25.965
+    },
+    {
+      "surah": 93,
+      "ayah": 3,
+      "start": 25.965,
+      "end": 39.378
+    },
+    {
+      "surah": 93,
+      "ayah": 4,
+      "start": 39.378,
+      "end": 52.564
+    },
+    {
+      "surah": 93,
+      "ayah": 5,
+      "start": 52.564,
+      "end": 66.959
+    },
+    {
+      "surah": 93,
+      "ayah": 6,
+      "start": 66.959,
+      "end": 77.397
+    },
+    {
+      "surah": 93,
+      "ayah": 7,
+      "start": 77.397,
+      "end": 88.22
+    },
+    {
+      "surah": 93,
+      "ayah": 8,
+      "start": 88.22,
+      "end": 97.56
+    },
+    {
+      "surah": 93,
+      "ayah": 9,
+      "start": 97.56,
+      "end": 109.41
+    },
+    {
+      "surah": 93,
+      "ayah": 10,
+      "start": 109.41,
+      "end": 120.399
+    },
+    {
+      "surah": 93,
+      "ayah": 11,
+      "start": 120.399,
+      "end": 131.9
+    }
+  ]
+}

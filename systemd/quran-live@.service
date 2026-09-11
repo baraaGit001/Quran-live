@@ -1,0 +1,53 @@
+# Templated: one instance per channel, e.g. quran-live@channel01.service
+# Installed as a *user* unit so nothing here runs as root.
+[Unit]
+Description=Quran live stream (%i)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+WorkingDirectory=%h/quran-live
+EnvironmentFile=%h/quran-live/.env
+ExecStart=/usr/bin/python3 -m engine.stream %i
+Restart=always
+RestartSec=10
+
+# --- Resource policy -------------------------------------------------------
+# PriceLens and AradoBot must win every contention: nice 15 plus a CPUWeight
+# well under the default 100 means the streams get CPU only when the web apps
+# are not asking for it, and the idle IO class keeps them off the disk while a
+# database wants it.
+Nice=15
+IOSchedulingClass=idle
+CPUWeight=20
+IOWeight=20
+# A ceiling, not a reservation. Streaming is ~0.3% of a core; the headroom is
+# for the one-off track renders the builder runs in the background.
+CPUQuota=120%
+MemoryMax=1500M
+MemoryHigh=1200M
+TasksMax=256
+
+# --- Hardening -------------------------------------------------------------
+# Deliberately limited to what a *user* manager can actually apply. The
+# kernel-facing options (ProtectKernelTunables/Modules/ControlGroups,
+# RestrictNamespaces, LockPersonality, RestrictSUIDSGID) all need privileges
+# the user manager does not have, and systemd refuses to start the unit at all
+# rather than ignoring them -- it exits 218/CAPABILITIES in a few milliseconds,
+# which then looks like a crash-looping application.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# The only paths the service legitimately writes.
+ReadWritePaths=%h/quran-live/cache %h/quran-live/state %h/quran-live/logs %h/quran-live/data
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=quran-live-%i
+
+[Install]
+WantedBy=default.target

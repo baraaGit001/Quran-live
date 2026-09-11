@@ -1,0 +1,38 @@
+# One channel = one YouTube Live stream. Copy this file to add another.
+name: "channel01"
+title: "القرآن الكريم • المصحف المجود • الشيخ محمد صديق المنشاوي"
+enabled: true
+
+# Audio and visuals are deliberately unrelated pools. The engine picks from each
+# independently: the recitation playing has no bearing on what is on screen.
+audio_dir: "assets/audio/minshawi"
+visual_dir: "assets/visuals"
+
+# Name of the env var holding this channel's YouTube key. The key itself never
+# appears in this file, so channel configs stay safe to commit.
+stream_key_env: "CHANNEL01_STREAM_KEY"
+
+stream:
+  # youtube (no time limit) | facebook (cuts off ~8h) | twitch
+  # Instagram has no public RTMP ingest, so it cannot be streamed to.
+  platform: "youtube"
+
+# Any .ttf in assets/fonts. Swap the file, rebuild, and the caption restyles.
+font: "assets/fonts/ArefRuqaa-Regular.ttf"
+
+overlay:
+  enabled: true
+  text: "الشيخ محمد صديق المنشاوي"
+  font_size: 56
+  color: "#FFFFFF"
+  position: "bottom"
+  margin: 70
+
+video:
+  width: 1280
+  height: 720
+  fps: 30
+  bitrate: "2000k"
+  # crop | blur | pad | auto  -- see engine/prerender.py
+  fit: "crop"
+  image_duration: 20

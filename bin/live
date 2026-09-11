@@ -1,0 +1,313 @@
+#!/usr/bin/env python3
+"""Management CLI for the Quran live streaming system.
+
+Every subcommand takes a fixed set of arguments and shells out only to
+systemctl/journalctl with an argument list built here -- no shell string is ever
+assembled from user input, so the CLI cannot be used to run arbitrary commands.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from engine import config as cfg_mod  # noqa: E402
+from engine import quran, timing, track as track_mod, validate  # noqa: E402
+from engine.stream import ChannelStreamer  # noqa: E402
+
+UNIT = "quran-live@{}.service"
+GREEN, YELLOW, RED, DIM, RESET = "\033[32m", "\033[33m", "\033[31m", "\033[2m", "\033[0m"
+MARK = {"ok": f"{GREEN}✓{RESET}", "warn": f"{YELLOW}!{RESET}", "fail": f"{RED}✗{RESET}"}
+
+
+def _systemctl(*args: str) -> int:
+    return subprocess.run(["systemctl", "--user", *args]).returncode
+
+
+def _known(name: str) -> str:
+    if name not in cfg_mod.list_channels():
+        sys.exit(f"unknown channel '{name}' (have: {', '.join(cfg_mod.list_channels()) or 'none'})")
+    return name
+
+
+def _targets(args) -> list[str]:
+    if getattr(args, "all", False):
+        return [c for c in cfg_mod.list_channels()
+                if (cfg_mod.load_channel(c).get("enabled", True))]
+    return [_known(args.channel)]
+
+
+def cmd_start(args):
+    for name in _targets(args):
+        print(f"starting {name}")
+        _systemctl("start", UNIT.format(name))
+    return 0
+
+
+def cmd_stop(args):
+    for name in _targets(args):
+        print(f"stopping {name}")
+        _systemctl("stop", UNIT.format(name))
+    return 0
+
+
+def cmd_restart(args):
+    for name in _targets(args):
+        print(f"restarting {name}")
+        _systemctl("restart", UNIT.format(name))
+    return 0
+
+
+def cmd_status(args):
+    names = _targets(args)
+    print(f"{'CHANNEL':<14}{'UNIT':<12}{'STATE':<12}{'RESTARTS':<10}{'UPTIME':<10}TRACK")
+    print("-" * 82)
+    for name in names:
+        unit = subprocess.run(
+            ["systemctl", "--user", "is-active", UNIT.format(name)],
+            capture_output=True, text=True,
+        ).stdout.strip() or "unknown"
+
+        status_file = ROOT / "state" / f"{name}.status.json"
+        data = {}
+        if status_file.exists():
+            try:
+                data = json.loads(status_file.read_text(encoding="utf-8"))
+            except ValueError:
+                pass
+        # A status file outlives the process that wrote it, so trusting it
+        # blindly reports a long-dead run as though it were live -- which is
+        # the one thing a status command must not do. The recorded supervisor
+        # pid decides: if it is gone, the file is history.
+        supervisor = data.get("supervisor_pid")
+        alive = False
+        if supervisor:
+            try:
+                os.kill(int(supervisor), 0)
+                alive = True
+            except (OSError, ValueError):
+                alive = False
+
+        if data and not alive:
+            # Padded before colouring: the escape codes count toward an
+            # f-string's width and would knock every later column out of line.
+            state = f"{DIM}{'stale':<12}{RESET}"
+            restarts = f"{DIM}{'-':<10}{RESET}"
+            uptime = f"{DIM}{'-':<10}{RESET}"
+            track = f"{DIM}-{RESET}"
+            print(f"{name:<14}{unit:<12}{state}{restarts}{uptime}{track}")
+            continue
+        if True:
+            up = data.get("uptime_seconds", 0)
+            state = data.get("state", "-")
+            restarts = str(data.get("restarts", "-"))
+            uptime = f"{up // 3600}h{(up % 3600) // 60:02d}m" if up else "-"
+            track = data.get("current_track", "-") or "-"
+
+        print(f"{name:<14}{unit:<12}{state:<12}{restarts:<10}{uptime:<10}{track}")
+    return 0
+
+
+def cmd_logs(args):
+    """Show a channel's log, from the file the streamer writes.
+
+    journald is tried only as a fallback: this host keeps no persistent journal
+    and creates no user journal, so `journalctl --user` is silent even while
+    the service is running normally.
+    """
+    name = _known(args.channel)
+    path = ROOT / "logs" / f"{name}.log"
+    if path.exists():
+        cmd = ["tail", "-n", str(args.lines)]
+        if args.follow:
+            cmd.append("-f")
+        cmd.append(str(path))
+        return subprocess.run(cmd).returncode
+
+    print(f"{DIM}no log file yet; trying journald{RESET}")
+    cmd = ["journalctl", "--user", "-u", UNIT.format(name), "-n", str(args.lines)]
+    if args.follow:
+        cmd.append("-f")
+    return subprocess.run(cmd).returncode
+
+
+def cmd_validate(args):
+    channels = [_known(args.channel)] if args.channel else None
+    rows, ok = validate.run(channels)
+    for row in rows:
+        detail = f"  {DIM}{row['detail']}{RESET}" if row["detail"] else ""
+        print(f"  {MARK[row['status']]} {row['label']}{detail}")
+    print()
+    print("all checks passed" if ok else f"{RED}validation failed{RESET}")
+    return 0 if ok else 1
+
+
+def cmd_build(args):
+    """Pre-render every recitation into a finished, ready-to-stream track.
+
+    This is where all the CPU goes -- roughly as long as the recitation itself
+    per track, once. Doing it here rather than at stream time is the whole
+    point: the live stream only ever copies packets, so it costs a fraction of
+    a percent of a core no matter how many channels run.
+    """
+    for name in _targets(args):
+        streamer = ChannelStreamer(name)
+        cfg = streamer.cfg
+        audio = cfg_mod.audio_pool(cfg)
+        images, videos = cfg_mod.visual_pool(cfg)
+        if not audio or not (images or videos):
+            print(f"{name}: {RED}needs at least one audio file and one visual{RESET}")
+            continue
+
+        missing = [a for a in audio if not quran.load_timings(a)]
+        if missing:
+            print(f"{name}: {YELLOW}{len(missing)} track(s) have no ayah timings; "
+                  f"run ./live sync {name} first — they will stream without "
+                  f"verse text{RESET}")
+
+        print(f"{name}: {len(audio)} recitation(s), "
+              f"{len(images) + len(videos)} visual(s)")
+        built = 0
+        while True:
+            ready_before = len(streamer.ready_tracks())
+            if not streamer.build_one():
+                break
+            built += 1
+            if len(streamer.ready_tracks()) == ready_before:
+                break  # made no progress; stop rather than spin
+            if args.limit and built >= args.limit:
+                print(f"  {DIM}stopping at --limit {args.limit}{RESET}")
+                break
+        ready = streamer.ready_tracks()
+        print(f"  {GREEN}{len(ready)}{RESET} track(s) ready to stream"
+              + (f", {built} built now" if built else " (all cached)"))
+    return 0
+
+
+def cmd_sync(args):
+    """Generate (or inspect) the per-ayah timing table for one audio file."""
+    cfg = cfg_mod.load_channel(_known(args.channel))
+    pool = cfg_mod.audio_pool(cfg)
+    if not pool:
+        sys.exit("no audio files in this channel's pool")
+
+    tracks = [p for p in pool if args.track in p.name] if args.track else pool
+    if not tracks:
+        sys.exit(f"no audio file matching '{args.track}'")
+
+    for track in tracks:
+        print(f"\n{track.name}")
+        if not args.show:
+            report = timing.build_timings(
+                track, surah=args.surah, noise_db=args.noise,
+                min_silence=args.min_silence,
+            )
+            if not report.get("ok"):
+                print(f"  {RED}{report.get('error')}{RESET}")
+                continue
+            colour = {"high": GREEN, "medium": YELLOW, "low": RED}[report["confidence"]]
+            print(f"  surah {report['surah']}, {report['ayahs_expected']} ayah(s), "
+                  f"{report['segments_detected']} segment(s) detected")
+            print(f"  confidence: {colour}{report['confidence']}{RESET} "
+                  f"(mean deviation {report['mean_deviation']})")
+            if report["suspect_ayahs"]:
+                print(f"  {YELLOW}check these ayahs: "
+                      f"{', '.join(map(str, report['suspect_ayahs']))}{RESET}")
+            print(f"  {DIM}{report['path']}{RESET}")
+
+        entries = quran.load_timings(track)
+        if not entries:
+            print(f"  {DIM}no timing file yet{RESET}")
+            continue
+        if args.show:
+            for entry in entries:
+                text = quran.ayah_text(entry["surah"], entry["ayah"]) or ""
+                span = entry["end"] - entry["start"]
+                print(f"  {entry['ayah']:>3}  {entry['start']:>7.1f} -> "
+                      f"{entry['end']:>7.1f}  ({span:>5.1f}s)  {text[:46]}")
+    return 0
+
+
+def cmd_enable(args):
+    name = _known(args.channel)
+    _systemctl("enable", UNIT.format(name))
+    print(f"{name} will now start on boot")
+    return 0
+
+
+def cmd_disable(args):
+    name = _known(args.channel)
+    _systemctl("disable", UNIT.format(name))
+    print(f"{name} will no longer start on boot")
+    return 0
+
+
+def cmd_list(args):
+    for name in cfg_mod.list_channels():
+        try:
+            cfg = cfg_mod.load_channel(name)
+            state = "enabled" if cfg.get("enabled", True) else "disabled"
+            print(f"  {name:<14}{state:<10}{cfg.get('title', '')}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  {name:<14}{RED}invalid{RESET}    {exc}")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="live", description="Quran live stream manager")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    def add(name, fn, needs_channel=True, allow_all=True):
+        p = sub.add_parser(name)
+        if needs_channel:
+            if allow_all:
+                p.add_argument("channel", nargs="?")
+                p.add_argument("--all", action="store_true")
+            else:
+                p.add_argument("channel")
+        p.set_defaults(func=fn)
+        return p
+
+    add("start", cmd_start)
+    add("stop", cmd_stop)
+    add("restart", cmd_restart)
+    add("status", cmd_status)
+    add("enable", cmd_enable, allow_all=False)
+    add("disable", cmd_disable, allow_all=False)
+    b = add("build", cmd_build)
+    b.add_argument("--force", action="store_true")
+    b.add_argument("--limit", type=int, default=0,
+                   help="stop after rendering this many tracks")
+    lg = add("logs", cmd_logs, allow_all=False)
+    lg.add_argument("-n", "--lines", type=int, default=80)
+    lg.add_argument("-f", "--follow", action="store_true")
+    sy = sub.add_parser("sync")
+    sy.add_argument("channel")
+    sy.add_argument("track", nargs="?", help="substring of the audio file name")
+    sy.add_argument("--surah", type=int, help="override the detected surah number")
+    sy.add_argument("--noise", type=int, default=-35, help="silence threshold in dB")
+    sy.add_argument("--min-silence", type=float, default=0.6, dest="min_silence")
+    sy.add_argument("--show", action="store_true", help="print existing timings only")
+    sy.set_defaults(func=cmd_sync)
+
+    v = sub.add_parser("validate")
+    v.add_argument("channel", nargs="?")
+    v.set_defaults(func=cmd_validate)
+    ls = sub.add_parser("list")
+    ls.set_defaults(func=cmd_list)
+
+    args = parser.parse_args()
+    if getattr(args, "channel", None) is None and not getattr(args, "all", False) \
+            and args.command in {"start", "stop", "restart", "status", "build"}:
+        args.all = True
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

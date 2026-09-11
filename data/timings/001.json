@@ -1,0 +1,47 @@
+{
+  "audio": "001.mp3",
+  "ayahs": [
+    {
+      "surah": 1,
+      "ayah": 1,
+      "start": 0.0,
+      "end": 20.107
+    },
+    {
+      "surah": 1,
+      "ayah": 2,
+      "start": 25.325,
+      "end": 32.88
+    },
+    {
+      "surah": 1,
+      "ayah": 3,
+      "start": 37.868,
+      "end": 51.006
+    },
+    {
+      "surah": 1,
+      "ayah": 4,
+      "start": 57.234,
+      "end": 76.668
+    },
+    {
+      "surah": 1,
+      "ayah": 5,
+      "start": 83.182,
+      "end": 92.406
+    },
+    {
+      "surah": 1,
+      "ayah": 6,
+      "start": 97.621,
+      "end": 117.651
+    },
+    {
+      "surah": 1,
+      "ayah": 7,
+      "start": 126.058,
+      "end": 177.432
+    }
+  ]
+}
