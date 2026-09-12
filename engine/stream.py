@@ -1,12 +1,19 @@
 """The 24/7 streamer for one channel.
 
 Each recitation is pre-rendered once into a finished track (background, verses
-burned in at the right moments, audio muxed) and remuxed to MPEG-TS. MPEG-TS
-concatenates by simply appending bytes, so the live stream is one long-lived
-ffmpeg reading a pipe that this process keeps writing tracks into, copying every
-packet through untouched:
+burned in at the right moments, audio muxed) and remuxed to MPEG-TS. The live
+stream is one long-lived ffmpeg reading a pipe that this process keeps writing
+tracks into, copying every packet through untouched:
 
     track1.ts + track2.ts + ... -> pipe -> ffmpeg -c copy -> RTMP
+
+MPEG-TS joins by appending bytes, but only the *container* does. Every track is
+encoded on its own and therefore starts its clock at zero, so appending the raw
+files sends time backwards at each join: the reader reports a corrupt packet and
+a timestamp discontinuity, patches the video with a rolling offset and clamps
+the audio DTS forward, and the two drift apart. Each track is therefore given a
+timestamp offset that continues the one before it as it is written into the
+pipe -- a stream copy, so the cost stays where the design needs it.
 
 Nothing is encoded while streaming, so a channel costs a few percent of a core
 no matter how long it runs, and there is no reconnect between tracks. The pool
@@ -31,7 +38,7 @@ from urllib.parse import urlsplit
 from . import config as cfg_mod
 from . import cache as cache_mod
 from . import quran, track as track_mod
-from .ffmpeg import ffmpeg_bin
+from .ffmpeg import ffmpeg_bin, span_of
 from .selector import Selector
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -58,6 +65,9 @@ class ChannelStreamer:
         self.cfg = cfg_mod.load_channel(channel)
         self.name = self.cfg["name"]
         self.stop_event = threading.Event()
+        # Where the next track starts on the stream's clock. Reset on every
+        # ffmpeg start: a reconnect is a new timeline for YouTube.
+        self.ts_cursor: float | None = None
         self.proc: subprocess.Popen | None = None
         self.restarts = 0
         self.started_at = time.time()
@@ -247,18 +257,81 @@ class ChannelStreamer:
             self.log(f"now playing: {self.current_track}")
 
             try:
-                with ts.open("rb") as handle:
-                    while not self.stop_event.is_set():
-                        chunk = handle.read(CHUNK)
-                        if not chunk:
-                            break
-                        # Blocks once ffmpeg's buffer is full; with -re on the
-                        # input that backpressure is what holds the feeder at
-                        # real time instead of racing ahead.
-                        sink.write(chunk)
+                self._write_one(ts, sink)
                 sink.flush()
             except (BrokenPipeError, ValueError, OSError):
                 break  # ffmpeg went away; the supervisor will restart it
+
+
+    # One AAC frame at 44.1 kHz. Placing the next track exactly at the previous
+    # one's last timestamp still leaves the two audio frames touching, and a
+    # reader calls that non-monotonic; a single frame of daylight between them
+    # is inaudible and makes the join strictly increasing.
+    JOIN_GUARD = 1024 / 44100
+
+    def _timeline(self, ts: Path) -> tuple[str, float] | None:
+        """The offset that places `ts` after whatever has already been sent.
+
+        Returns (offset, new cursor) or None if the track cannot be probed, in
+        which case the caller sends it untouched rather than not at all.
+        """
+        span = span_of(ts)
+        if span is None:
+            return None
+        start, end = span
+        if self.ts_cursor is None:
+            # The first track of a connection defines the origin; shifting it
+            # to zero would make the offset negative, and ffmpeg then rewrites
+            # the timestamps to avoid that and breaks the chain on the spot.
+            self.ts_cursor = start
+        offset = self.ts_cursor - start
+        return f"{offset:.6f}", offset + end + self.JOIN_GUARD
+
+    def _write_one(self, ts: Path, sink) -> None:
+        """Copy one track into the pipe on the stream's running clock."""
+        ff = ffmpeg_bin()
+        plan = self._timeline(ts) if ff else None
+        if plan is None:
+            self.log(f"could not probe {ts.name} -- sending it unshifted")
+            with ts.open("rb") as handle:
+                while not self.stop_event.is_set():
+                    chunk = handle.read(CHUNK)
+                    if not chunk:
+                        break
+                    sink.write(chunk)
+            return
+
+        offset, cursor = plan
+        proc = subprocess.Popen(
+            [ff, "-hide_banner", "-loglevel", "error", "-i", str(ts),
+             "-c", "copy", "-muxdelay", "0", "-muxpreload", "0",
+             # The continuity counters restart with every track too; saying so
+             # is what stops the reader calling the first packet corrupt.
+             "-mpegts_flags", "+initial_discontinuity",
+             "-output_ts_offset", offset,
+             "-f", "mpegts", "pipe:1"],
+            stdout=subprocess.PIPE,
+        )
+        try:
+            assert proc.stdout is not None
+            while not self.stop_event.is_set():
+                chunk = proc.stdout.read(CHUNK)
+                if not chunk:
+                    break
+                # Blocks once ffmpeg's buffer is full; with -re on the input
+                # that backpressure is what holds the feeder at real time
+                # instead of racing ahead.
+                sink.write(chunk)
+        finally:
+            if proc.stdout:
+                proc.stdout.close()
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+        self.ts_cursor = cursor
 
     # ---------- ffmpeg ----------
 
@@ -307,9 +380,9 @@ class ChannelStreamer:
     def _command(self) -> list[str]:
         return [
             ffmpeg_bin(), "-hide_banner", "-loglevel", "warning",
-            # Each track carries its own timestamps starting at zero, so they
-            # are regenerated into one continuous timeline as they arrive.
-            "-fflags", "+genpts", "-re",
+            # Tracks arrive already placed on one continuous timeline by
+            # _write_one, so nothing here has to repair them.
+            "-re",
             "-f", "mpegts", "-i", "pipe:0",
             "-c", "copy",
             "-f", "flv", "-flvflags", "no_duration_filesize",
@@ -357,6 +430,7 @@ class ChannelStreamer:
             self.log("starting ffmpeg")
 
             try:
+                self.ts_cursor = None
                 self.proc = subprocess.Popen(self._command(), stdin=subprocess.PIPE)
             except Exception as exc:  # noqa: BLE001
                 self.log(f"failed to launch ffmpeg: {exc}")
