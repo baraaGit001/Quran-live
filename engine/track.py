@@ -54,6 +54,17 @@ FADE_LEVELS = (0.18, 0.42, 0.68, 0.88)
 FADE_SECONDS = 0.36
 FADE_MIN_HOLD = 0.40
 
+# A pause longer than this clears the screen; a shorter one does not.
+#
+# The verse should leave when the reciter stops, and with timings taken from
+# the recitation itself a verse now ends on its last spoken word rather than at
+# the end of the silence after it -- so the screen empties whenever he pauses,
+# which is what it should do. But two verses read under one breath are parted
+# by a fraction of a second, and clearing for that would fade the text out and
+# straight back in: a flicker, not a pause. Held through, the short gap simply
+# extends the verse that is already up until the next one is spoken.
+GAP_CLEARS = 1.2
+
 
 def _fade_for(duration: float) -> float:
     """How long each ramp may be for an ayah of this length."""
@@ -122,7 +133,7 @@ def build_captions(cfg: dict, audio: Path, entries: list[dict]) -> Path | None:
                 # key -- otherwise every caption set already on disk would be
                 # reused unfaded and the change would appear to do nothing.
                 "fade:" + ",".join(str(x) for x in FADE_LEVELS),
-                f"{FADE_SECONDS}:{FADE_MIN_HOLD}")
+                f"{FADE_SECONDS}:{FADE_MIN_HOLD}:{GAP_CLEARS}")
     out_dir = CAPTION_DIR / key
     out_dir.mkdir(parents=True, exist_ok=True)
     listing = out_dir / "list.txt"
@@ -191,7 +202,7 @@ def build_captions(cfg: dict, audio: Path, entries: list[dict]) -> Path | None:
 
     lines: list[str] = []
     cursor = 0.0
-    for index, raw, entry in raws:
+    for position, (index, raw, entry) in enumerate(raws):
         paths = _variants(index)
         if not all(q.exists() for q in paths.values()):
             # One ffmpeg per verse, not one per opacity: the source is decoded
@@ -221,7 +232,14 @@ def build_captions(cfg: dict, audio: Path, entries: list[dict]) -> Path | None:
             lines.append(f"file '{blank.as_posix()}'")
             lines.append(f"duration {entry['start'] - cursor:.3f}")
 
-        span = max(0.1, entry["end"] - entry["start"])
+        # A short gap to the next verse is held rather than cleared, so the
+        # text stays up through a breath and only leaves on a real pause.
+        shown_until = entry["end"]
+        if position + 1 < len(raws):
+            next_start = raws[position + 1][2]["start"]
+            if 0 <= next_start - entry["end"] < GAP_CLEARS:
+                shown_until = next_start
+        span = max(0.1, shown_until - entry["start"])
         fade = _fade_for(span)
         if fade:
             step = fade / len(FADE_LEVELS)
@@ -235,7 +253,7 @@ def build_captions(cfg: dict, audio: Path, entries: list[dict]) -> Path | None:
             for level in reversed(FADE_LEVELS):
                 lines.append(f"file '{paths[level].as_posix()}'")
                 lines.append(f"duration {step:.3f}")
-        cursor = entry["end"]
+        cursor = shown_until
 
     if not lines:
         return None
@@ -347,7 +365,7 @@ def _segment_signature() -> str:
 # rest of the key so the previous recipe can still be computed -- see
 # playable_track.
 CAPTION_STYLE = "fade:" + ",".join(str(x) for x in FADE_LEVELS) + \
-                f"|{FADE_SECONDS}:{FADE_MIN_HOLD}"
+                f"|{FADE_SECONDS}:{FADE_MIN_HOLD}:{GAP_CLEARS}"
 
 
 def _key_parts(cfg: dict, audio: Path, background: Path) -> list[str] | None:
