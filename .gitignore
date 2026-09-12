@@ -16,3 +16,6 @@ assets/fonts/*
 
 __pycache__/
 *.pyc
+
+# Content parked out of the pool.
+assets/_removed-portrait/

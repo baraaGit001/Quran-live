@@ -16,6 +16,10 @@ video:
   fit: "blur"
   # Seconds per still image when building a loop out of images.
   image_duration: 20
+  # Seconds one still stays on screen before the pool moves to the next. A
+  # long surah is otherwise two hours of one unchanging frame. 0 holds a
+  # single image for the whole track. Videos ignore this and play out fully.
+  visual_rotate_seconds: 300
   # Keyframe interval in seconds. YouTube wants <= 4s; 2s reconnects faster.
   keyframe_interval: 2
 

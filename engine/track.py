@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import hashlib
 import os
+import random
 import subprocess
 from pathlib import Path
 
+from . import config as cfg_mod
 from . import overlay as overlay_mod
 from . import quran
 from .ffmpeg import duration_of, ffmpeg_bin
@@ -27,6 +29,8 @@ from .prerender import _fit_chain, resolve_fit
 ROOT = Path(__file__).resolve().parent.parent
 TRACK_DIR = ROOT / "cache" / "tracks"
 CAPTION_DIR = ROOT / "cache" / "captions"
+BG_DIR = ROOT / "cache" / "backgrounds"
+SEGMENT_DIR = ROOT / "cache" / "segments"
 
 
 def _hash(*parts: str) -> str:
@@ -74,8 +78,17 @@ def build_captions(cfg: dict, audio: Path, entries: list[dict]) -> Path | None:
     # band tall enough for the longest verse.
     band_w = int(cfg["video"]["width"])
 
+    # The band is overlaid at `H - band_h - margin`, so a band taller than the
+    # frame less its margin lands at a negative y and the top of the verse is
+    # cut off by the frame edge -- the tallest verse of a surah decides this,
+    # so one long ayah truncates every long ayah in the track. Cap the band at
+    # what can actually be shown; pass 2 then scales a verse too tall for the
+    # cap down into it, the same rescue it already does for one too wide.
+    margin = int((cfg.get("overlay") or {}).get("margin", 70))
+    max_band_h = max(1, int(cfg["video"]["height"]) - margin)
+
     key = _hash(str(audio), str(font), str(size), colour, str(wrap_at),
-                str(len(entries)), str(band_w))
+                str(len(entries)), str(band_w), str(max_band_h))
     out_dir = CAPTION_DIR / key
     out_dir.mkdir(parents=True, exist_ok=True)
     listing = out_dir / "list.txt"
@@ -118,7 +131,7 @@ def build_captions(cfg: dict, audio: Path, entries: list[dict]) -> Path | None:
 
     if not raws:
         return None
-    band_h = tallest + 24  # a little breathing room above and below
+    band_h = min(tallest + 24, max_band_h)  # breathing room, but never off-frame
 
     blank = out_dir / "blank.png"
     subprocess.run(
@@ -170,6 +183,71 @@ def build_captions(cfg: dict, audio: Path, entries: list[dict]) -> Path | None:
     return listing
 
 
+def _rotation_seconds(cfg: dict) -> int:
+    """How long one still holds before the next, or 0 to hold it all track."""
+    try:
+        return max(0, int(cfg["video"].get("visual_rotate_seconds", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _pool_signature(cfg: dict) -> str:
+    """Names of the still pool, so adding or removing one re-keys the cache."""
+    images, _ = cfg_mod.visual_pool(cfg)
+    return ",".join(sorted(q.name for q in images))
+
+
+def segment_pool() -> list[Path]:
+    """Every rotation unit on disk, in a stable order.
+
+    Segments are built offline by build_segments.py: one per still, and one per
+    slice of each source video. They all share codec parameters, which is what
+    lets the concat demuxer hand them to the filter graph as one stream.
+    """
+    if not SEGMENT_DIR.is_dir():
+        return []
+    return sorted(SEGMENT_DIR.glob("*.ts"), key=lambda q: q.name)
+
+
+def build_background_loop(cfg: dict, background: Path, duration: float) -> Path | None:
+    """A concat list of shuffled segments long enough to cover `duration`.
+
+    The order is shuffled per track but seeded by the picked background, so the
+    same inputs always produce the same running order -- the cache key stays
+    meaningful and a re-render reproduces the track it replaces.
+
+    Returns None when rotation is off or no segments have been built, and the
+    caller falls back to holding one still for the whole track.
+    """
+    rotate = _rotation_seconds(cfg)
+    if rotate <= 0:
+        return None
+    segments = segment_pool()
+    if len(segments) < 2:
+        return None
+
+    order = list(segments)
+    random.Random(f"{background.name}|{duration:.0f}|{len(segments)}").shuffle(order)
+
+    needed = max(1, int(duration // rotate) + 1)
+    picked = [order[i % len(order)] for i in range(needed)]
+
+    key = _hash(str(background), str(rotate), _segment_signature(), str(needed))
+    SEGMENT_DIR.mkdir(parents=True, exist_ok=True)
+    listing = BG_DIR / ("loop-" + key + ".txt")
+    listing.parent.mkdir(parents=True, exist_ok=True)
+    listing.write_text(
+        "\n".join("file '" + f.as_posix() + "'" for f in picked) + "\n",
+        encoding="utf-8",
+    )
+    return listing
+
+
+def _segment_signature() -> str:
+    """Names of the built segments, so rebuilding them re-keys every track."""
+    return ",".join(q.name for q in segment_pool())
+
+
 def track_key(cfg: dict, audio: Path, background: Path) -> str | None:
     """The cache key for one (recitation, background) pair, without building it.
 
@@ -191,6 +269,7 @@ def track_key(cfg: dict, audio: Path, background: Path) -> str | None:
         str(v.get("fit", "blur")), str(cfg.get("font", "")),
         str((cfg.get("overlay") or {}).get("font_size", 54)),
         str(len(entries or [])),
+        str(_rotation_seconds(cfg)), _pool_signature(cfg), _segment_signature(),
     )
 
 
@@ -223,6 +302,7 @@ def build_track(cfg: dict, audio: Path, background: Path, is_image: bool) -> Pat
         str(v.get("fit", "blur")), str(cfg.get("font", "")),
         str((cfg.get("overlay") or {}).get("font_size", 54)),
         str(len(entries or [])),
+        str(_rotation_seconds(cfg)), _pool_signature(cfg), _segment_signature(),
     )
     # Rendered straight to MPEG-TS, which is the form the streamer feeds into
     # ffmpeg. Going through mp4 first and remuxing would keep two copies of
@@ -250,26 +330,34 @@ def build_track(cfg: dict, audio: Path, background: Path, is_image: bool) -> Pat
                 f"rendered; refusing to build a track with no verse text"
             )
 
+    # A still pool rotates; a video is left to play out at its own pace.
+    bg_loop = build_background_loop(cfg, background, duration) if is_image else None
+
     cmd = [ff, "-y", "-hide_banner", "-loglevel", "error"]
-    if is_image:
-        cmd += ["-loop", "1"]
+    if bg_loop is not None:
+        cmd += ["-f", "concat", "-safe", "0", "-i", str(bg_loop)]
+    elif is_image:
+        cmd += ["-loop", "1", "-i", str(background)]
     else:
-        cmd += ["-stream_loop", "-1"]
-    cmd += ["-i", str(background), "-i", str(audio)]
+        cmd += ["-stream_loop", "-1", "-i", str(background)]
+    cmd += ["-i", str(audio)]
 
     margin = (cfg.get("overlay") or {}).get("margin", 70)
     position = (cfg.get("overlay") or {}).get("position", "bottom")
     y = f"H-h-{margin}" if position == "bottom" else str(margin)
 
+    fit = f"scale={v['width']}:{v['height']},setsar=1" if bg_loop is not None \
+        else _fit_chain(cfg)
+
     if captions:
         cmd += ["-f", "concat", "-safe", "0", "-i", str(captions)]
         chain = (
-            f"[0:v]{_fit_chain(cfg)},fps={v['fps']},format=yuv420p[bg];"
+            f"[0:v]{fit},fps={v['fps']},format=yuv420p[bg];"
             f"[2:v]format=rgba[cap];"
             f"[bg][cap]overlay=(W-w)/2:{y}:shortest=0:format=auto[vout]"
         )
     else:
-        chain = f"[0:v]{_fit_chain(cfg)},fps={v['fps']},format=yuv420p[vout]"
+        chain = f"[0:v]{fit},fps={v['fps']},format=yuv420p[vout]"
 
     gop = int(v["fps"]) * int(v.get("keyframe_interval", 2))
     cmd += [

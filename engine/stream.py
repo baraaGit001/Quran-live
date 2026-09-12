@@ -19,12 +19,14 @@ import json
 import os
 import random
 import signal
+import socket
 import subprocess
 import sys
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from . import config as cfg_mod
 from . import cache as cache_mod
@@ -276,7 +278,31 @@ class ChannelStreamer:
                     f"unknown platform '{platform}' -- use one of "
                     f"{', '.join(sorted(INGEST))}, or set stream.ingest_url"
                 )
-        return f"{base.rstrip('/')}/{key}"
+        return f"{self._resolved(base).rstrip('/')}/{key}"
+
+    @staticmethod
+    def _resolved(base: str) -> str:
+        """The ingest URL with its hostname replaced by an A record.
+
+        The vendored ffmpeg is a static build, and static glibc cannot load the
+        NSS modules that getaddrinfo needs, so ffmpeg cannot resolve a hostname
+        at all -- it fails instantly with "Failed to resolve hostname ...:
+        System error" and exits 251. Python's resolver works normally, so the
+        lookup happens here and ffmpeg is handed a literal address. Resolving on
+        every start (rather than pinning an IP in the channel file) means the
+        stream follows YouTube's ingest as it moves. If the lookup fails, the
+        hostname is left as-is so the error surfaces as a network problem.
+        """
+        parts = urlsplit(base)
+        host = parts.hostname
+        if not host:
+            return base
+        try:
+            ip = socket.gethostbyname(host)
+        except OSError:
+            return base
+        netloc = ip if parts.port is None else f"{ip}:{parts.port}"
+        return parts._replace(netloc=netloc).geturl()
 
     def _command(self) -> list[str]:
         return [
