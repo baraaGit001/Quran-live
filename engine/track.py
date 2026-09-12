@@ -15,6 +15,7 @@ unusable; this is one overlay stage no matter how long the surah.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import random
 import subprocess
@@ -400,21 +401,6 @@ def track_key(cfg: dict, audio: Path, background: Path) -> str | None:
     return _hash(*parts, CAPTION_STYLE) if parts else None
 
 
-def _superseded_key(cfg: dict, audio: Path, background: Path) -> str | None:
-    """The key this pair had before the caption style entered the key.
-
-    Tracks rendered under the old recipe are still perfectly watchable -- they
-    simply have verses that cut in and out instead of fading. Being able to
-    name them is what makes the change safe to deploy: the channel keeps
-    playing them while the replacements are encoded, instead of every track on
-    disk becoming unreachable the moment the key moves and the stream going
-    quiet with ffmpeg sitting on an empty pipe. That has happened twice; it is
-    not a thing to leave to luck.
-    """
-    parts = _key_parts(cfg, audio, background)
-    return _hash(*parts) if parts else None
-
-
 def existing_track(cfg: dict, audio: Path, background: Path) -> Path | None:
     """The current rendering of this pair, or None if it has yet to be built.
 
@@ -429,30 +415,89 @@ def existing_track(cfg: dict, audio: Path, background: Path) -> Path | None:
     return candidate if candidate.exists() else None
 
 
+def _write_meta(key: str, audio: Path, background: Path) -> None:
+    """Record what a rendered track is of, beside the track itself.
+
+    The filename is a hash of everything that went into the render, which is
+    what makes the cache correct: change the bitrate, the font, the timings,
+    and the old file is no longer an answer to the question being asked. What
+    it cannot do is say what the old file *was*, so the moment anything moves,
+    every track on disk becomes an anonymous blob and the channel has nothing
+    to play until the encoder catches up -- hours, for a change that takes a
+    second to make. That has taken this stream off air twice.
+
+    Two lines of JSON fix it permanently. The key still decides what counts as
+    current; the sidecar is what lets a superseded track keep the channel fed
+    until its replacement exists.
+    """
+    try:
+        (TRACK_DIR / f"{key}.meta.json").write_text(
+            json.dumps({"audio": audio.name, "background": background.name}),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+_INDEX: tuple[float, dict[tuple[str, str], list[Path]]] | None = None
+
+
+def _track_index() -> dict[tuple[str, str], list[Path]]:
+    """(audio, background) -> rendered tracks of it, newest first.
+
+    Cached against the directory's own mtime: this is consulted once per
+    recitation per background on every pick, and rebuilding it from the
+    sidecars each time would be hundreds of file reads between tracks.
+    """
+    global _INDEX
+    try:
+        stamp = TRACK_DIR.stat().st_mtime
+    except OSError:
+        return {}
+    if _INDEX is not None and _INDEX[0] == stamp:
+        return _INDEX[1]
+
+    index: dict[tuple[str, str], list[Path]] = {}
+    for meta in TRACK_DIR.glob("*.meta.json"):
+        ts = meta.with_name(meta.name[: -len(".meta.json")] + ".ts")
+        if not ts.exists():
+            meta.unlink(missing_ok=True)
+            continue
+        try:
+            data = json.loads(meta.read_text(encoding="utf-8"))
+            index.setdefault((data["audio"], data["background"]), []).append(ts)
+        except (OSError, ValueError, KeyError):
+            continue
+    for tracks in index.values():
+        tracks.sort(key=lambda q: q.stat().st_mtime, reverse=True)
+    _INDEX = (stamp, index)
+    return index
+
+
 def playable_track(cfg: dict, audio: Path, background: Path) -> Path | None:
     """Anything on disk that can go on air for this pair, current or not.
 
     This is what the streamer asks. It prefers the current rendering and falls
-    back to a superseded one, so a style change costs the viewer nothing while
-    it rolls through the cache.
+    back to the most recent superseded one, so a change to the way tracks are
+    rendered costs the viewer nothing while it rolls through the cache.
     """
     found = existing_track(cfg, audio, background)
     if found:
         return found
-    old = _superseded_key(cfg, audio, background)
-    if not old:
-        return None
-    candidate = TRACK_DIR / f"{old}.ts"
-    return candidate if candidate.exists() else None
+    for candidate in _track_index().get((audio.name, background.name), []):
+        return candidate
+    return None
 
 
 def drop_superseded(cfg: dict, audio: Path, background: Path) -> None:
-    """Delete the old rendering of a pair once the new one is in place."""
-    if not existing_track(cfg, audio, background):
+    """Delete older renderings of a pair once the current one is in place."""
+    current = existing_track(cfg, audio, background)
+    if not current:
         return
-    old = _superseded_key(cfg, audio, background)
-    if old:
-        (TRACK_DIR / f"{old}.ts").unlink(missing_ok=True)
+    for old in _track_index().get((audio.name, background.name), []):
+        if old != current:
+            old.unlink(missing_ok=True)
+            old.with_name(old.stem + ".meta.json").unlink(missing_ok=True)
 
 
 def build_track(cfg: dict, audio: Path, background: Path, is_image: bool) -> Path | None:
@@ -551,7 +596,8 @@ def build_track(cfg: dict, audio: Path, background: Path, is_image: bool) -> Pat
         partial.unlink(missing_ok=True)
         return None
     os.replace(partial, out)
-    # The superseded rendering of this pair has just been replaced on air, so
-    # it is only taking up disk now.
+    _write_meta(key, audio, background)
+    # Older renderings of this pair have just been replaced on air, so they are
+    # only taking up disk now.
     drop_superseded(cfg, audio, background)
     return out
