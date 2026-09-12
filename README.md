@@ -192,8 +192,14 @@ are written to a `.part` file and renamed (so a dropped connection never leaves
 a half file for the renderer), and are refused if they would take the disk
 below the same 10 GB floor the cache respects.
 
-`build` and `sync` outlive a request, so they run detached and the page polls
-their output rather than holding a connection open for an hour.
+`build` and `sync` outlive a request, so they run detached; the page opens an
+EventSource and receives their output line by line as it appears. Each job also
+appends to `logs/jobs/<id>.log`, so restarting the panel does not lose the log
+of a build that is still running.
+
+Nothing expensive runs on a request thread. Cache sizes and the ready-track
+count per channel are refreshed on a timer by a background thread and served
+from memory, so a page open during a build costs the box almost nothing.
 
 Run it at boot like the channels:
 

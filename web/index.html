@@ -3,175 +3,478 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>quran-live</title>
+<title>لوحة التحكم — quran-live</title>
 <style>
+  /* ---------------------------------------------------------------- tokens */
   :root {
     color-scheme: dark;
-    --bg: #0d1117; --panel: #161b22; --line: #262d36;
-    --ink: #e6edf3; --dim: #8b949e;
-    --accent: #2f9e63; --accent-dim: #1c5f3c;
-    --warn: #d29922; --bad: #d9534f;
-    --radius: 10px;
+
+    --bg:        #0b0f14;
+    --surface:   #131a22;
+    --surface-2: #182029;
+    --sunken:    #0a0e13;
+    --line:      #232d39;
+    --line-soft: #1b242e;
+
+    --ink:       #e8eef5;
+    --ink-dim:   #94a3b4;
+    --ink-faint: #64748b;
+
+    --brand:     #3fb27f;
+    --brand-ink: #0b0f14;
+    --brand-bg:  #10352a;
+
+    --warn:      #d9a441;
+    --warn-bg:   #33280f;
+    --bad:       #e0605c;
+    --bad-bg:    #3a1a1a;
+
+    --r-sm: 6px; --r: 10px; --r-lg: 14px;
+    --pad: 16px;
+
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   }
+
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
-    margin: 0; background: var(--bg); color: var(--ink);
-    font: 14px/1.6 system-ui, "Segoe UI", Tahoma, sans-serif;
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.6 system-ui, "Segoe UI", Tahoma, "Noto Naskh Arabic", sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
-  header {
-    position: sticky; top: 0; z-index: 5;
-    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-    padding: 12px 18px; background: #0d1117ee; backdrop-filter: blur(8px);
+  h1, h2, h3 { margin: 0; font-weight: 600; line-height: 1.3; }
+
+  /* ---------------------------------------------------------------- header */
+  .topbar {
+    position: sticky; top: 0; z-index: 30;
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 12px 20px;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--line);
   }
-  header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .2px; }
-  .grow { flex: 1; }
-  .disk { font-size: 12px; color: var(--dim); }
-  main { padding: 18px; max-width: 1100px; margin: 0 auto; display: grid; gap: 18px; }
-  section {
-    background: var(--panel); border: 1px solid var(--line);
-    border-radius: var(--radius); overflow: hidden;
+  .brand { display: flex; align-items: center; gap: 9px; font-size: 15px; font-weight: 650; }
+  .brand .mark {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--brand); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 22%, transparent);
   }
-  section > h2 {
-    margin: 0; padding: 11px 16px; font-size: 13px; font-weight: 600;
-    color: var(--dim); border-bottom: 1px solid var(--line);
-    text-transform: uppercase; letter-spacing: .6px;
+  .brand .mark.off { background: var(--ink-faint); box-shadow: none; }
+  .spacer { flex: 1 1 auto; }
+
+  .diskmeter { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: var(--ink-dim); }
+  .diskmeter .track {
+    width: 92px; height: 5px; border-radius: 99px;
+    background: var(--line); overflow: hidden;
   }
-  .body { padding: 14px 16px; }
+  .diskmeter .track > i { display: block; height: 100%; background: var(--brand); transition: width .4s; }
+  .diskmeter.low .track > i { background: var(--warn); }
+  .diskmeter.crit .track > i { background: var(--bad); }
 
-  .chan { padding: 14px 16px; border-bottom: 1px solid var(--line); }
-  .chan:last-child { border-bottom: 0; }
-  .chan-top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-  .chan-name { font-weight: 600; }
-  .chan-title { color: var(--dim); font-size: 13px; }
-  .meta { margin: 6px 0 10px; font-size: 12px; color: var(--dim); }
-  .meta code { background: #0d1117; padding: 1px 6px; border-radius: 5px; }
-
-  button {
-    font: inherit; font-size: 13px; cursor: pointer;
-    background: #21262d; color: var(--ink);
-    border: 1px solid var(--line); border-radius: 7px;
-    padding: 5px 12px; transition: .12s;
+  /* --------------------------------------------------------------- layout  */
+  main {
+    max-width: 1180px; margin: 0 auto;
+    padding: 22px 20px 64px;
+    display: grid; gap: 22px;
   }
-  button:hover:not(:disabled) { border-color: #3d4753; background: #2a313a; }
-  button:disabled { opacity: .45; cursor: not-allowed; }
-  button.go { background: var(--accent-dim); border-color: var(--accent); }
-  button.danger { color: var(--bad); }
-  .row { display: flex; gap: 7px; flex-wrap: wrap; }
 
-  pre {
-    margin: 0; padding: 12px 14px; background: #0d1117;
-    border: 1px solid var(--line); border-radius: 8px;
-    font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    overflow: hidden;
+  }
+  .card > header {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 13px var(--pad);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .card > header h2 {
+    font-size: 12px; letter-spacing: .8px; text-transform: uppercase;
+    color: var(--ink-dim);
+  }
+  .card > .inner { padding: var(--pad); }
+
+  /* --------------------------------------------------------------- buttons */
+  button, .btn {
+    font: inherit; font-size: 13.5px; line-height: 1.4;
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 7px 13px; cursor: pointer;
+    background: var(--surface-2); color: var(--ink);
+    border: 1px solid var(--line); border-radius: var(--r-sm);
+    transition: background .12s, border-color .12s, opacity .12s;
+    white-space: nowrap;
+  }
+  button:hover:not(:disabled) { background: #202a35; border-color: #303d4c; }
+  button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.primary { background: var(--brand); color: var(--brand-ink); border-color: var(--brand); font-weight: 600; }
+  button.primary:hover:not(:disabled) { background: #4cc38d; border-color: #4cc38d; }
+  button.danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 35%, var(--line)); }
+  button.danger:hover:not(:disabled) { background: var(--bad-bg); border-color: var(--bad); }
+  button.ghost { background: transparent; }
+  button.tiny { padding: 4px 9px; font-size: 12.5px; }
+  .btnrow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+  /* ----------------------------------------------------------------- pills */
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; font-weight: 600; letter-spacing: .2px;
+    padding: 3px 10px; border-radius: 99px;
+    background: var(--surface-2); color: var(--ink-dim);
+    border: 1px solid var(--line);
+  }
+  .pill .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+  .pill.ok   { color: var(--brand); background: var(--brand-bg); border-color: color-mix(in srgb, var(--brand) 30%, transparent); }
+  .pill.warn { color: var(--warn);  background: var(--warn-bg);  border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+  .pill.bad  { color: var(--bad);   background: var(--bad-bg);   border-color: color-mix(in srgb, var(--bad) 32%, transparent); }
+  .pill.ok .dot { animation: breathe 2.4s ease-in-out infinite; }
+  @keyframes breathe { 50% { opacity: .35; } }
+
+  /* -------------------------------------------------------------- channels */
+  .channel + .channel { border-top: 1px solid var(--line-soft); }
+  .channel { padding: var(--pad); display: grid; gap: 14px; }
+  .ch-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .ch-name { font-size: 15px; font-weight: 650; font-family: var(--mono); }
+  .ch-title { color: var(--ink-dim); font-size: 13.5px; }
+
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip {
+    font-size: 11.5px; font-family: var(--mono); color: var(--ink-faint);
+    background: var(--sunken); border: 1px solid var(--line-soft);
+    border-radius: var(--r-sm); padding: 2px 8px;
+    direction: ltr; unicode-bidi: isolate;
+  }
+
+  .vitals {
+    display: grid; gap: 10px;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  }
+  .vital {
+    background: var(--sunken); border: 1px solid var(--line-soft);
+    border-radius: var(--r); padding: 10px 12px; min-width: 0;
+  }
+  .vital .k { font-size: 11px; letter-spacing: .5px; text-transform: uppercase; color: var(--ink-faint); }
+  .vital .v { font-size: 16px; font-weight: 600; margin-top: 3px; overflow-wrap: anywhere; }
+  .vital .v.mono { font-family: var(--mono); font-size: 14px; direction: ltr; unicode-bidi: isolate; text-align: right; }
+  .vital .sub { font-size: 11.5px; color: var(--ink-faint); margin-top: 2px; }
+
+  .meter { height: 5px; border-radius: 99px; background: var(--line); overflow: hidden; margin-top: 7px; }
+  .meter > i { display: block; height: 100%; background: var(--brand); transition: width .5s; }
+  .meter.warn > i { background: var(--warn); }
+
+  .actions { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; }
+  .actions .group { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .actions .sep { width: 1px; align-self: stretch; background: var(--line); }
+  .actions .label { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--ink-faint); }
+
+  /* ------------------------------------------------------------------ jobs */
+  .job { border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+  .job + .job { margin-top: 12px; }
+  .job > .bar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 9px 12px; background: var(--surface-2);
+  }
+  .job .cmd { font-family: var(--mono); font-size: 13px; direction: ltr; unicode-bidi: isolate; }
+  .console {
+    margin: 0; padding: 12px 14px; max-height: 340px; overflow: auto;
+    background: var(--sunken); color: #cfe0ee;
+    font: 12.5px/1.65 var(--mono);
     white-space: pre-wrap; word-break: break-word;
-    max-height: 300px; overflow: auto; direction: ltr; text-align: left;
+    direction: ltr; text-align: left;
+    border-top: 1px solid var(--line-soft);
   }
+  .console:empty::after { content: "…"; color: var(--ink-faint); }
 
-  .tabs { display: flex; gap: 6px; padding: 12px 16px 0; flex-wrap: wrap; }
-  .tabs button[aria-selected="true"] { background: var(--accent-dim); border-color: var(--accent); }
+  /* ----------------------------------------------------------------- media */
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tabs button[aria-selected="true"] {
+    background: var(--brand-bg); border-color: color-mix(in srgb, var(--brand) 40%, transparent); color: var(--brand);
+  }
+  .tabs .count { color: var(--ink-faint); font-size: 12px; }
+  .tabs button[aria-selected="true"] .count { color: inherit; opacity: .8; }
 
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: right; padding: 7px 8px; border-bottom: 1px solid var(--line); }
-  th { color: var(--dim); font-weight: 500; font-size: 12px; }
-  td.file { direction: ltr; text-align: left; font-family: ui-monospace, Menlo, monospace; font-size: 12px; word-break: break-all; }
-  td.num { color: var(--dim); white-space: nowrap; }
+  .search {
+    font: inherit; font-size: 13.5px;
+    background: var(--sunken); color: var(--ink);
+    border: 1px solid var(--line); border-radius: var(--r-sm);
+    padding: 7px 11px; min-width: 180px; flex: 1 1 180px; max-width: 320px;
+  }
+  .search:focus { outline: none; border-color: var(--brand); }
+
+  .filegroup + .filegroup { margin-top: 18px; }
+  .filegroup > h3 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .6px;
+    color: var(--ink-dim); margin-bottom: 7px;
+    font-family: var(--mono); direction: ltr; unicode-bidi: isolate; text-align: right;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { text-align: right; padding: 8px 10px; border-bottom: 1px solid var(--line-soft); }
+  th { color: var(--ink-faint); font-weight: 500; font-size: 11.5px; text-transform: uppercase; letter-spacing: .5px; }
+  tbody tr:hover { background: var(--surface-2); }
   tbody tr:last-child td { border-bottom: 0; }
+  td.file { font-family: var(--mono); font-size: 12.5px; direction: ltr; unicode-bidi: isolate; text-align: right; word-break: break-all; }
+  td.num { color: var(--ink-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  td.act { text-align: left; width: 1%; }
 
+  /* ---------------------------------------------------------------- upload */
   .drop {
-    margin-top: 12px; padding: 18px; text-align: center;
-    border: 1px dashed #3d4753; border-radius: 8px; color: var(--dim);
-    transition: .12s;
+    display: block; margin-top: 16px; padding: 22px 18px; text-align: center;
+    border: 1.5px dashed #2e3a48; border-radius: var(--r);
+    color: var(--ink-dim); cursor: pointer; transition: .15s;
   }
-  .drop.hot { border-color: var(--accent); color: var(--ink); background: #1c5f3c22; }
+  .drop:hover { border-color: #3b4a5c; color: var(--ink); }
+  .drop.hot { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 8%, transparent); color: var(--ink); }
   .drop input { display: none; }
-  .bar { height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; margin-top: 10px; }
-  .bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  .drop .hint { display: block; font-size: 12px; color: var(--ink-faint); margin-top: 6px; }
 
-  .cache { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
-  .cache div { background: #0d1117; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
-  .cache b { display: block; font-size: 15px; font-weight: 600; }
-  .cache span { font-size: 11px; color: var(--dim); }
-
-  .job { margin-bottom: 10px; }
-  .job h3 { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
-  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-left: 6px; }
-  .dot.run { background: var(--warn); animation: pulse 1.2s infinite; }
-  .dot.ok { background: var(--accent); }
-  .dot.bad { background: var(--bad); }
-  @keyframes pulse { 50% { opacity: .25; } }
-
-  #toast {
-    position: fixed; bottom: 16px; left: 16px; z-index: 20;
-    background: var(--panel); border: 1px solid var(--line);
-    border-radius: 8px; padding: 10px 14px; max-width: min(460px, 90vw);
-    box-shadow: 0 8px 28px #0008; display: none;
-    direction: ltr; text-align: left; font-size: 13px;
+  .queue { margin-top: 12px; display: grid; gap: 7px; }
+  .qrow {
+    display: grid; gap: 4px;
+    background: var(--sunken); border: 1px solid var(--line-soft);
+    border-radius: var(--r-sm); padding: 8px 11px;
   }
-  #toast.bad { border-color: var(--bad); }
-  .empty { color: var(--dim); padding: 6px 0; }
+  .qrow .top { display: flex; gap: 10px; align-items: baseline; }
+  .qrow .nm { font-family: var(--mono); font-size: 12.5px; direction: ltr; unicode-bidi: isolate; flex: 1; word-break: break-all; text-align: right; }
+  .qrow .st { font-size: 12px; color: var(--ink-dim); white-space: nowrap; }
+  .qrow.done .st { color: var(--brand); }
+  .qrow.fail .st { color: var(--bad); }
+
+  .field { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  .field label { font-size: 12.5px; color: var(--ink-dim); }
+  select {
+    font: inherit; font-size: 13.5px;
+    background: var(--sunken); color: var(--ink);
+    border: 1px solid var(--line); border-radius: var(--r-sm); padding: 6px 10px;
+  }
+
+  /* ----------------------------------------------------------------- cache */
+  .cachegrid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); }
+  .cachegrid > div {
+    background: var(--sunken); border: 1px solid var(--line-soft);
+    border-radius: var(--r); padding: 11px 12px;
+  }
+  .cachegrid b { display: block; font-size: 17px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .cachegrid span { font-size: 11.5px; color: var(--ink-faint); font-family: var(--mono); }
+
+  /* ------------------------------------------------------------- utilities */
+  .muted { color: var(--ink-dim); }
+  .faint { color: var(--ink-faint); font-size: 12.5px; }
+  .empty { color: var(--ink-faint); padding: 10px 0; font-size: 13.5px; }
+  .scroller { overflow-x: auto; }
+
+  /* --------------------------------------------------------------- dialog  */
+  dialog {
+    border: 1px solid var(--line); border-radius: var(--r-lg);
+    background: var(--surface); color: var(--ink);
+    padding: 0; max-width: min(420px, 92vw);
+    box-shadow: 0 24px 60px #000a;
+  }
+  dialog::backdrop { background: #000a; backdrop-filter: blur(2px); }
+  dialog .inner { padding: 18px var(--pad); display: grid; gap: 12px; }
+  dialog h3 { font-size: 15px; }
+  dialog p { margin: 0; color: var(--ink-dim); font-size: 13.5px; }
+  dialog .nm { font-family: var(--mono); font-size: 12.5px; direction: ltr; unicode-bidi: isolate; }
+  dialog .btnrow { justify-content: flex-start; margin-top: 4px; }
+
+  /* ---------------------------------------------------------------- toast  */
+  #toasts {
+    position: fixed; inset-block-end: 16px; inset-inline-start: 16px;
+    z-index: 60; display: grid; gap: 8px; max-width: min(420px, 92vw);
+  }
+  .toast {
+    background: var(--surface-2); border: 1px solid var(--line);
+    border-inline-start: 3px solid var(--brand);
+    border-radius: var(--r-sm); padding: 10px 13px; font-size: 13px;
+    box-shadow: 0 10px 30px #0009;
+    animation: rise .18s ease-out;
+  }
+  .toast.bad { border-inline-start-color: var(--bad); }
+  .toast .msg { direction: ltr; unicode-bidi: isolate; text-align: start; white-space: pre-wrap; word-break: break-word; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+
+  @media (max-width: 620px) {
+    main { padding: 16px 13px 48px; gap: 16px; }
+    .card > header, .card > .inner, .channel { padding: 13px; }
+    .actions { gap: 12px; }
+    .actions .sep { display: none; }
+    .vitals { grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
 </style>
 </head>
 <body>
 
-<header>
-  <h1>quran-live</h1>
-  <span class="disk" id="disk"></span>
-  <span class="grow"></span>
-  <button id="refresh">تحديث</button>
-</header>
+<div class="topbar">
+  <div class="brand"><span class="mark off" id="brandmark"></span> quran-live</div>
+  <div class="diskmeter" id="disk" hidden>
+    <span class="track"><i></i></span><span class="txt"></span>
+  </div>
+  <span class="spacer"></span>
+  <span class="faint" id="freshness"></span>
+  <button class="ghost tiny" id="refresh">تحديث</button>
+</div>
 
 <main>
-  <section>
-    <h2>القنوات</h2>
-    <div id="channels"><div class="body empty">…</div></div>
+  <section class="card">
+    <header><h2>القنوات</h2></header>
+    <div id="channels"><div class="inner empty">…</div></div>
   </section>
 
-  <section>
-    <h2>الحالة</h2>
-    <div class="body"><pre id="status">…</pre></div>
+  <section class="card" id="jobs-card" hidden>
+    <header>
+      <h2>العمليات</h2>
+      <span class="spacer"></span>
+      <label class="faint"><input type="checkbox" id="autoscroll" checked> تمرير تلقائي</label>
+    </header>
+    <div class="inner" id="jobs"></div>
   </section>
 
-  <section id="jobs-sec" hidden>
-    <h2>عمليات جارية</h2>
-    <div class="body" id="jobs"></div>
-  </section>
+  <section class="card">
+    <header>
+      <h2>الملفات</h2>
+      <span class="spacer"></span>
+      <input class="search" id="search" type="search" placeholder="بحث…" autocomplete="off">
+    </header>
+    <div class="inner">
+      <div class="tabs" id="tabs"></div>
+      <div id="media" style="margin-top:14px"></div>
 
-  <section>
-    <h2>الميديا</h2>
-    <div class="tabs" id="tabs"></div>
-    <div class="body">
-      <div id="media"></div>
+      <div class="field" id="folderfield" hidden>
+        <label for="folder">مجلد الشيخ</label>
+        <select id="folder"></select>
+        <input class="search" id="newfolder" placeholder="أو اسم مجلد جديد" hidden style="flex:0 1 200px">
+      </div>
+
       <label class="drop" id="drop">
         <input type="file" id="file" multiple>
         اسحب الملفات هنا أو اضغط للاختيار
-        <div class="bar"><i id="prog"></i></div>
+        <span class="hint" id="uphint"></span>
       </label>
-      <p class="meta" id="uphint"></p>
+      <div class="queue" id="queue"></div>
     </div>
   </section>
 
-  <section>
-    <h2>الكاش</h2>
-    <div class="body"><div class="cache" id="cache"></div></div>
+  <section class="card">
+    <header>
+      <h2>الكاش</h2>
+      <span class="spacer"></span>
+      <span class="faint" id="cachefresh"></span>
+      <button class="ghost tiny" id="cachebtn">إعادة الحساب</button>
+    </header>
+    <div class="inner"><div class="cachegrid" id="cache"><div class="empty">…</div></div></div>
   </section>
 
-  <section>
-    <h2>السجلّ</h2>
-    <div class="body">
-      <div class="row" id="logbtns"></div>
-      <pre id="logs" style="margin-top:12px">اختر قناة</pre>
-    </div>
+  <section class="card">
+    <header>
+      <h2>السجلّ</h2>
+      <span class="spacer"></span>
+      <div class="btnrow" id="logbtns"></div>
+    </header>
+    <div class="inner"><pre class="console" id="logs">اختر قناة</pre></div>
   </section>
 </main>
 
-<div id="toast"></div>
+<dialog id="confirm">
+  <div class="inner">
+    <h3 id="cf-title"></h3>
+    <p id="cf-body"></p>
+    <p class="nm" id="cf-name"></p>
+    <div class="btnrow">
+      <button id="cf-yes" class="danger">تأكيد</button>
+      <button id="cf-no" class="ghost">إلغاء</button>
+    </div>
+  </div>
+</dialog>
+
+<div id="toasts"></div>
 
 <script>
+"use strict";
+
+/* =========================================================================
+ * Every value below comes from the server: a channel title, a file name, a
+ * line of build output. None of it is ever concatenated into innerHTML -- the
+ * previous panel did that and a file named `<img src=x onerror=...>.mp3`,
+ * which the upload rules happily accept, would run in the operator's browser.
+ * Nodes are built and text is assigned through textContent, so a filename is
+ * only ever a filename.
+ * ====================================================================== */
+
 const $ = s => document.querySelector(s);
 const TOKEN = new URLSearchParams(location.search).get("token") || "";
 
-// Every action here restarts a broadcast or writes into the pools, so failures
-// are shown rather than swallowed into a silent no-op.
+/** el("div.cls#id", {attrs}, [children|string]) -> HTMLElement */
+function el(spec, attrs, kids) {
+  const [head, ...classes] = String(spec).split(".");
+  const [tag, id] = head.split("#");
+  const node = document.createElement(tag || "div");
+  if (id) node.id = id;
+  if (classes.length) node.className = classes.join(" ");
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k === "text") node.textContent = v;
+    else if (k === "dataset") Object.assign(node.dataset, v);
+    else if (k === "style") node.setAttribute("style", v);
+    else node.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of [].concat(kids || [])) {
+    if (kid === null || kid === undefined || kid === false) continue;
+    node.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  }
+  return node;
+}
+const clear = n => { while (n.firstChild) n.removeChild(n.firstChild); return n; };
+const fill = (n, kids) => { clear(n).append(...[].concat(kids || [])); return n; };
+
+/* ------------------------------------------------------------- formatting */
+const fmtBytes = n => {
+  if (!n) return "0 B";
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.min(u.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
+  return (n / 1024 ** i).toFixed(i ? 1 : 0) + " " + u[i];
+};
+const fmtDur = s => {
+  if (s === null || s === undefined) return "—";
+  s = Math.max(0, Math.floor(s));
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  if (d) return `${d}ي ${h}س`;
+  if (h) return `${h}س ${m}د`;
+  if (m) return `${m}د`;
+  return `${s}ث`;
+};
+const fmtAgo = ts => !ts ? "" : `قبل ${fmtDur(Date.now() / 1000 - ts)}`;
+
+/* ------------------------------------------------------------------ toast */
+function toast(msg, bad = false) {
+  const t = el("div.toast" + (bad ? ".bad" : ""), {}, el("div.msg", { text: String(msg).trim().slice(0, 500) }));
+  $("#toasts").append(t);
+  setTimeout(() => { t.style.opacity = "0"; setTimeout(() => t.remove(), 250); }, bad ? 9000 : 4000);
+}
+
+/* ----------------------------------------------------------------- dialog */
+function confirmBox({ title, body, name, verb = "تأكيد", danger = true }) {
+  return new Promise(resolve => {
+    const dlg = $("#confirm");
+    $("#cf-title").textContent = title;
+    $("#cf-body").textContent = body || "";
+    $("#cf-name").textContent = name || "";
+    $("#cf-name").hidden = !name;
+    const yes = $("#cf-yes");
+    yes.textContent = verb;
+    yes.className = danger ? "danger" : "primary";
+    const done = ok => { dlg.close(); yes.onclick = null; $("#cf-no").onclick = null; resolve(ok); };
+    yes.onclick = () => done(true);
+    $("#cf-no").onclick = () => done(false);
+    dlg.addEventListener("cancel", () => resolve(false), { once: true });
+    dlg.showModal();
+  });
+}
+
+/* -------------------------------------------------------------------- api */
 async function api(path, opts = {}) {
   const o = { ...opts, headers: { ...(opts.headers || {}), ...(TOKEN ? { "X-Token": TOKEN } : {}) } };
   const r = await fetch(path, o);
@@ -180,206 +483,435 @@ async function api(path, opts = {}) {
   return body;
 }
 
-let toastTimer;
-function toast(msg, bad = false) {
-  const t = $("#toast");
-  t.textContent = String(msg).trim().slice(0, 600) || (bad ? "failed" : "done");
-  t.className = bad ? "bad" : "";
-  t.style.display = "block";
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (t.style.display = "none"), bad ? 9000 : 4000);
-}
-
-const fmt = n => {
-  if (!n) return "0 B";
-  const u = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.min(u.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
-  return (n / 1024 ** i).toFixed(i ? 1 : 0) + " " + u[i];
-};
-
+/* ====================================================================== */
+/*  state                                                                  */
+/* ====================================================================== */
 const KINDS = { audio: "تلاوات", images: "صور", videos: "فيديو", fonts: "خطوط" };
-const ACCEPT = {
-  audio: ".mp3,.m4a,.ogg,.opus,.wav,.flac",
-  images: ".jpg,.jpeg,.png,.webp",
-  videos: ".mp4,.mkv,.mov,.webm",
-  fonts: ".ttf,.otf",
-};
+let overview = { channels: [], jobs: [], readiness: {}, disk: {} };
 let kind = "audio";
-let state = { media: {}, channels: [] };
+let mediaCache = {};          // kind -> {files, folders, ext}
+let query = "";
 let logChannel = null;
+const consoles = new Map();   // job id -> {pre, source, cursor}
 
-function renderChannels(chs) {
-  const box = $("#channels");
-  if (!chs.length) { box.innerHTML = '<div class="body empty">لا توجد قنوات في channels/</div>'; return; }
-  box.innerHTML = chs.map(c => `
-    <div class="chan">
-      <div class="chan-top">
-        <span class="chan-name">${c.name}</span>
-        <span class="chan-title">${c.title || ""}</span>
-      </div>
-      <div class="meta">
-        <code>${c.audio_dir || "—"}</code> · <code>${c.visual_dir || "—"}</code>
-        ${c.platform ? " · " + c.platform : ""}${c.enabled ? "" : " · معطّلة"}
-      </div>
-      <div class="row">
-        <button class="go" data-ch="${c.name}" data-act="start">تشغيل</button>
-        <button data-ch="${c.name}" data-act="stop">إيقاف</button>
-        <button data-ch="${c.name}" data-act="restart">إعادة</button>
-        <button data-ch="${c.name}" data-act="validate">فحص</button>
-        <button data-ch="${c.name}" data-act="sync">مزامنة التوقيتات</button>
-        <button data-ch="${c.name}" data-act="build">بناء المسارات</button>
-      </div>
-    </div>`).join("");
+/* ====================================================================== */
+/*  channels                                                               */
+/* ====================================================================== */
+function statePill(st) {
+  const unit = st.unit || "unknown";
+  const running = st.state === "running" && unit === "active";
+  const cls = running ? "ok" : unit === "failed" ? "bad" : unit === "active" ? "warn" : "";
+  const label = !st.state ? unit
+    : running ? "على الهواء"
+    : unit === "failed" ? "فشل"
+    : unit === "inactive" ? "متوقفة"
+    : `${st.state} · ${unit}`;
+  return el("span.pill." + (cls || "x"), {}, [el("span.dot"), label]);
 }
 
-function renderJobs(jobs) {
-  const sec = $("#jobs-sec");
-  if (!jobs || !jobs.length) { sec.hidden = true; return; }
-  sec.hidden = false;
-  $("#jobs").innerHTML = jobs.map(j => {
-    const cls = j.running ? "run" : j.code === 0 ? "ok" : "bad";
-    const label = j.running ? "جارٍ" : j.code === 0 ? "تم" : "فشل (" + j.code + ")";
-    return `<div class="job"><h3>${j.cmd} <span class="dot ${cls}"></span><span class="chan-title"> ${label}</span></h3>
-      <pre>${(j.tail || "").replace(/[<&]/g, m => ({ "<": "&lt;", "&": "&amp;" }[m])) || "…"}</pre></div>`;
-  }).join("");
+function vital(k, v, opts = {}) {
+  return el("div.vital", {}, [
+    el("div.k", { text: k }),
+    el("div.v" + (opts.mono ? ".mono" : ""), { text: v }),
+    opts.sub ? el("div.sub", { text: opts.sub }) : null,
+    opts.meter ? el("div.meter" + (opts.meterWarn ? ".warn" : ""), {},
+      el("i", { style: `width:${Math.max(0, Math.min(100, opts.meter))}%` })) : null,
+  ]);
+}
+
+function channelCard(c) {
+  const st = c.status || {};
+  const ready = (overview.readiness || {})[c.name] || {};
+  const running = st.state === "running" && st.unit === "active";
+
+  const head = el("div.ch-head", {}, [
+    el("span.ch-name", { text: c.name }),
+    statePill(st),
+    el("span.spacer"),
+    c.enabled ? null : el("span.pill.warn", {}, "معطّلة في الإعدادات"),
+  ]);
+
+  const title = c.title ? el("div.ch-title", { text: c.title }) : null;
+
+  const chips = el("div.chips", {}, [
+    c.audio_dir && el("span.chip", { text: c.audio_dir }),
+    c.visual_dir && el("span.chip", { text: c.visual_dir }),
+    c.platform && el("span.chip", { text: c.platform }),
+    c.font && el("span.chip", { text: c.font.split("/").pop() }),
+  ].filter(Boolean));
+
+  const pct = ready.total ? (ready.ready / ready.total) * 100 : 0;
+  const vitals = el("div.vitals", {}, [
+    vital("على الهواء الآن", st.current_track || "—", { mono: true }),
+    vital("مدة التشغيل", running ? fmtDur(st.uptime_seconds) : "—",
+      { sub: st.restarts ? `${st.restarts} إعادة تشغيل` : "بلا إعادة تشغيل" }),
+    vital("مسارات جاهزة",
+      ready.ready === null || ready.ready === undefined ? "—" : `${ready.ready} / ${ready.total}`,
+      { meter: pct, meterWarn: ready.total && ready.ready < 5,
+        sub: ready.total && ready.ready < 5 ? "الرصيد منخفض" : "" }),
+    vital("آخر تحديث للحالة", st.age === null || st.age === undefined ? "—" : fmtDur(st.age),
+      { sub: st.pid ? `pid ${st.pid}` : "" }),
+  ]);
+
+  const act = (label, action, cls) =>
+    el("button" + (cls ? "." + cls : ""), { text: label, dataset: { ch: c.name, act: action } });
+
+  const actions = el("div.actions", {}, [
+    el("div.group", {}, [
+      el("span.label", { text: "البث" }),
+      running ? act("إيقاف", "stop") : act("تشغيل", "start", "primary"),
+      act("إعادة", "restart"),
+    ]),
+    el("div.sep"),
+    el("div.group", {}, [
+      el("span.label", { text: "الصيانة" }),
+      act("فحص", "validate"),
+      act("مزامنة التوقيتات", "sync"),
+      act("بناء المسارات", "build"),
+    ]),
+  ]);
+
+  return el("div.channel", {}, [head, title, chips, vitals, actions].filter(Boolean));
+}
+
+function renderChannels() {
+  const box = $("#channels");
+  if (!overview.channels.length) {
+    return fill(box, el("div.inner.empty", { text: "لا توجد قنوات في channels/" }));
+  }
+  fill(box, overview.channels.map(channelCard));
+
+  const anyLive = overview.channels.some(c => c.status && c.status.state === "running" && c.status.unit === "active");
+  $("#brandmark").classList.toggle("off", !anyLive);
+}
+
+/* ====================================================================== */
+/*  jobs -- streamed, not polled                                           */
+/* ====================================================================== */
+function jobBlock(j) {
+  const cls = j.running ? "warn" : j.code === 0 ? "ok" : "bad";
+  const label = j.running ? "جارٍ" : j.code === 0 ? "تم" : `فشل (${j.code})`;
+  const when = j.running
+    ? `منذ ${fmtDur(Date.now() / 1000 - j.started)}`
+    : fmtAgo(j.finished);
+
+  const pre = el("pre.console");
+  const block = el("div.job", {}, [
+    el("div.bar", {}, [
+      el("span.pill." + cls, {}, [el("span.dot"), label]),
+      el("span.cmd", { text: j.cmd }),
+      el("span.spacer"),
+      el("span.faint", { text: when }),
+    ]),
+    pre,
+  ]);
+  attachConsole(j.id, pre);
+  return block;
+}
+
+/** Open (or keep) an EventSource for one job and append lines as they land. */
+function attachConsole(id, pre) {
+  const prev = consoles.get(id);
+  if (prev) {
+    // Re-rendering the list must not restart the stream; move the live node.
+    pre.replaceWith(prev.pre);
+    return;
+  }
+  const entry = { pre, source: null };
+  consoles.set(id, entry);
+
+  const url = `/api/jobs/${encodeURIComponent(id)}/events` + (TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : "");
+  const src = new EventSource(url);
+  entry.source = src;
+
+  src.addEventListener("line", ev => {
+    const atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 24;
+    pre.append(document.createTextNode(ev.data + "\n"));
+    // Bounded: a full build prints for hours and this is only ever a tail.
+    while (pre.childNodes.length > 3000) pre.removeChild(pre.firstChild);
+    if ($("#autoscroll").checked && atEnd) pre.scrollTop = pre.scrollHeight;
+  });
+  src.addEventListener("end", () => { src.close(); entry.closed = true; loadOverview(); });
+  src.onerror = () => { if (entry.closed) src.close(); };
+}
+
+function renderJobs() {
+  const jobs = overview.jobs || [];
+  $("#jobs-card").hidden = !jobs.length;
+  if (!jobs.length) return;
+  fill($("#jobs"), jobs.map(jobBlock));
+
+  for (const [id, entry] of consoles) {
+    if (!jobs.some(j => j.id === id)) { entry.source && entry.source.close(); consoles.delete(id); }
+  }
+}
+
+/* ====================================================================== */
+/*  media                                                                  */
+/* ====================================================================== */
+function renderTabs() {
+  fill($("#tabs"), Object.entries(KINDS).map(([k, label]) =>
+    el("button", { dataset: { kind: k }, "aria-selected": String(k === kind) }, [
+      label, " ", el("span.count", { text: String((mediaCache[k] || { files: [] }).files.length || 0) }),
+    ])));
 }
 
 function renderMedia() {
-  $("#tabs").innerHTML = Object.entries(KINDS).map(([k, label]) =>
-    `<button data-kind="${k}" aria-selected="${k === kind}">${label} (${(state.media[k] || []).length})</button>`).join("");
+  const data = mediaCache[kind];
+  const box = $("#media");
+  if (!data) return fill(box, el("div.empty", { text: "…" }));
 
-  const items = state.media[kind] || [];
-  $("#media").innerHTML = items.length ? `
-    <table><thead><tr><th>الملف</th><th>الحجم</th><th></th></tr></thead><tbody>
-    ${items.map(f => `<tr>
-      <td class="file">${f.name}</td>
-      <td class="num">${fmt(f.size)}</td>
-      <td style="text-align:left"><button class="danger" data-del="${encodeURIComponent(f.name)}">حذف</button></td>
-    </tr>`).join("")}
-    </tbody></table>` : '<div class="empty">لا ملفات</div>';
+  const q = query.trim().toLowerCase();
+  const files = q ? data.files.filter(f => f.name.toLowerCase().includes(q)) : data.files;
 
-  $("#file").setAttribute("accept", ACCEPT[kind]);
+  if (!files.length) {
+    fill(box, el("div.empty", { text: q ? "لا نتائج" : "لا ملفات" }));
+  } else {
+    // Audio is one folder per reciter; grouping makes a 114-file pool legible.
+    const groups = new Map();
+    for (const f of files) {
+      const g = f.folder || "";
+      if (!groups.has(g)) groups.set(g, []);
+      groups.get(g).push(f);
+    }
+    fill(box, [...groups.entries()].map(([folder, items]) => {
+      const rows = items.map(f => el("tr", {}, [
+        el("td.file", { text: folder ? f.name.slice(folder.length + 1) : f.name }),
+        el("td.num", { text: fmtBytes(f.size) }),
+        el("td.act", {}, el("button.danger.tiny", { text: "حذف", dataset: { del: f.name } })),
+      ]));
+      const table = el("table", {}, [
+        el("thead", {}, el("tr", {}, [
+          el("th", { text: "الملف" }), el("th", { text: "الحجم" }), el("th"),
+        ])),
+        el("tbody", {}, rows),
+      ]);
+      return el("div.filegroup", {}, [
+        folder ? el("h3", { text: folder + " · " + items.length }) : null,
+        el("div.scroller", {}, table),
+      ].filter(Boolean));
+    }));
+  }
+
+  // The reciter folder used to be asked for with prompt() once per file, which
+  // made uploading a whole mushaf a hundred dialogs. It is a field now.
+  const needsFolder = kind === "audio";
+  $("#folderfield").hidden = !needsFolder;
+  if (needsFolder) {
+    const sel = $("#folder");
+    const keep = sel.value;
+    fill(sel, [...data.folders.map(f => el("option", { value: f, text: f })),
+               el("option", { value: "__new__", text: "مجلد جديد…" })]);
+    sel.value = data.folders.includes(keep) ? keep : (data.folders[0] || "__new__");
+    $("#newfolder").hidden = sel.value !== "__new__";
+  }
+
+  $("#file").setAttribute("accept", data.ext.join(","));
   $("#uphint").textContent = kind === "audio"
-    ? "سمِّ الملف برقم السورة (018.mp3) لتُطابَق الآيات تلقائيًا. ارفع داخل مجلد الشيخ بكتابة اسمه قبل الملف."
-    : "المسموح: " + ACCEPT[kind];
+    ? "سمِّ الملف برقم السورة (018.mp3) لتُطابَق الآيات تلقائيًا · " + data.ext.join(" ")
+    : "المسموح: " + data.ext.join(" ");
 }
 
-function renderLogButtons(chs) {
-  $("#logbtns").innerHTML = chs.map(c =>
-    `<button data-log="${c.name}" aria-selected="${c.name === logChannel}">${c.name}</button>`).join("")
-    || '<span class="empty">—</span>';
-}
-
-async function load() {
+async function loadMedia(k, force) {
+  if (mediaCache[k] && !force) return renderMedia();
   try {
-    state = await api("/api/state");
+    mediaCache[k] = await api(`/api/media/${k}`);
   } catch (e) { toast(e.message, true); return; }
-  renderChannels(state.channels);
-  renderLogButtons(state.channels);
-  $("#status").textContent = state.status || "—";
-  renderJobs(state.jobs);
+  renderTabs();
   renderMedia();
-  const d = state.disk || {};
-  $("#disk").textContent = d.total ? `القرص: ${fmt(d.free)} متاح من ${fmt(d.total)}` : "";
-  $("#cache").innerHTML = Object.entries(state.cache || {}).sort((a, b) => b[1] - a[1])
-    .map(([k, v]) => `<div><b>${fmt(v)}</b><span>${k}</span></div>`).join("") || '<div class="empty">فارغ</div>';
 }
 
-// -- actions ---------------------------------------------------------------
+/* ====================================================================== */
+/*  cache + logs                                                           */
+/* ====================================================================== */
+async function loadCache(refresh) {
+  try {
+    const r = await api("/api/cache" + (refresh ? "?refresh=1" : ""));
+    const rows = Object.entries(r.sizes || {}).sort((a, b) => b[1] - a[1]);
+    fill($("#cache"), rows.length
+      ? rows.map(([k, v]) => el("div", {}, [el("b", { text: fmtBytes(v) }), el("span", { text: k })]))
+      : el("div.empty", { text: "فارغ" }));
+    $("#cachefresh").textContent = r.at ? fmtAgo(r.at) : "";
+  } catch (e) { toast(e.message, true); }
+}
+
+function renderLogButtons() {
+  fill($("#logbtns"), overview.channels.map(c =>
+    el("button.tiny", { text: c.name, dataset: { log: c.name }, "aria-selected": String(c.name === logChannel) })));
+}
+
+async function showLogs(name) {
+  logChannel = name;
+  renderLogButtons();
+  $("#logs").textContent = "…";
+  try {
+    const r = await api(`/api/logs/${encodeURIComponent(name)}?n=200`);
+    $("#logs").textContent = r.output || "(فارغ)";
+    $("#logs").scrollTop = $("#logs").scrollHeight;
+  } catch (e) { $("#logs").textContent = e.message; }
+}
+
+/* ====================================================================== */
+/*  overview polling                                                       */
+/* ====================================================================== */
+let pollTimer = null;
+
+async function loadOverview() {
+  try {
+    overview = await api("/api/overview");
+  } catch (e) { toast(e.message, true); return; }
+
+  renderChannels();
+  renderJobs();
+  renderLogButtons();
+
+  const d = overview.disk || {};
+  const meter = $("#disk");
+  if (d.total) {
+    meter.hidden = false;
+    const usedPct = ((d.total - d.free) / d.total) * 100;
+    meter.querySelector("i").style.width = usedPct + "%";
+    meter.querySelector(".txt").textContent = `${fmtBytes(d.free)} متاح`;
+    meter.classList.toggle("low", d.free < d.floor * 3);
+    meter.classList.toggle("crit", d.free < d.floor);
+  }
+  $("#freshness").textContent = new Date().toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+  schedulePoll();
+}
+
+/** A live channel is worth watching closely; an idle box is not. */
+function schedulePoll() {
+  clearTimeout(pollTimer);
+  const busy = (overview.jobs || []).some(j => j.running);
+  const live = overview.channels.some(c => c.status && c.status.state === "running");
+  pollTimer = setTimeout(loadOverview, busy ? 5000 : live ? 15000 : 30000);
+}
+
+/* ====================================================================== */
+/*  upload                                                                 */
+/* ====================================================================== */
+function queueRow(name) {
+  const st = el("span.st", { text: "في الانتظار" });
+  const row = el("div.qrow", {}, el("div.top", {}, [el("span.nm", { text: name }), st]));
+  $("#queue").append(row);
+  return {
+    progress: p => { st.textContent = Math.round(p * 100) + "%"; },
+    done: msg => { row.classList.add("done"); st.textContent = msg; },
+    fail: msg => { row.classList.add("fail"); st.textContent = msg; },
+  };
+}
+
+function chosenFolder() {
+  if (kind !== "audio") return "";
+  const sel = $("#folder");
+  const name = sel.value === "__new__" ? $("#newfolder").value.trim() : sel.value;
+  return name;
+}
+
+function put(file, folder, ui) {
+  return new Promise((resolve, reject) => {
+    const path = `/api/media/${kind}/` +
+      (folder ? encodeURIComponent(folder) + "/" : "") + encodeURIComponent(file.name);
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", path);
+    if (TOKEN) xhr.setRequestHeader("X-Token", TOKEN);
+    xhr.upload.onprogress = ev => { if (ev.lengthComputable) ui.progress(ev.loaded / ev.total); };
+    xhr.onload = () => {
+      let b = {}; try { b = JSON.parse(xhr.responseText); } catch {}
+      xhr.status < 400 ? resolve(b) : reject(new Error(b.error || xhr.statusText));
+    };
+    xhr.onerror = () => reject(new Error("انقطع الاتصال أثناء الرفع"));
+    xhr.send(file);
+  });
+}
+
+async function upload(files) {
+  const folder = chosenFolder();
+  if (kind === "audio" && !folder) {
+    toast("اختر مجلد الشيخ أولًا", true);
+    return;
+  }
+  clear($("#queue"));
+  const rows = [...files].map(f => ({ file: f, ui: queueRow(f.name) }));
+  for (const { file, ui } of rows) {
+    try {
+      const r = await put(file, folder, ui);
+      ui.done(fmtBytes(r.size));
+    } catch (e) { ui.fail(e.message); }
+  }
+  await loadMedia(kind, true);
+  loadCache(false);
+}
+
+/* ====================================================================== */
+/*  events                                                                 */
+/* ====================================================================== */
 document.addEventListener("click", async e => {
   const b = e.target.closest("button");
   if (!b) return;
 
-  if (b.dataset.kind) { kind = b.dataset.kind; renderMedia(); return; }
-
-  if (b.dataset.log) {
-    logChannel = b.dataset.log;
-    renderLogButtons(state.channels);
-    $("#logs").textContent = "…";
-    try {
-      const r = await api(`/api/logs/${logChannel}?n=200`);
-      $("#logs").textContent = r.output || "(فارغ)";
-    } catch (err) { $("#logs").textContent = err.message; }
-    return;
-  }
+  if (b.dataset.kind) { kind = b.dataset.kind; query = ""; $("#search").value = ""; renderTabs(); loadMedia(kind); return; }
+  if (b.dataset.log)  { showLogs(b.dataset.log); return; }
+  if (b.id === "refresh")  { loadOverview(); loadMedia(kind, true); loadCache(false); return; }
+  if (b.id === "cachebtn") { $("#cachefresh").textContent = "جارٍ الحساب…"; setTimeout(() => loadCache(true), 400); loadCache(true); return; }
 
   if (b.dataset.act) {
     const { ch, act } = b.dataset;
-    // build re-encodes every track and can run for hours; make it deliberate.
-    if (act === "build" && !confirm(`بناء مسارات ${ch}؟ قد يستغرق ساعات.`)) return;
+    // These three cost real time or take a broadcast off air; make them deliberate.
+    const gate = {
+      build: { title: "بناء كل المسارات؟", body: "يعيد ترميز كل تلاوة ولم تُبنَ بعد. قد يستغرق ساعات من المعالج.", verb: "ابدأ البناء" },
+      sync:  { title: "إعادة استنتاج التوقيتات؟", body: "يستبدل توقيتات الآيات المستنتجة لهذه القناة.", verb: "ابدأ المزامنة" },
+      stop:  { title: "إيقاف البث؟", body: "ستخرج القناة من الهواء فورًا.", verb: "أوقف البث" },
+    }[act];
+    if (gate && !await confirmBox({ ...gate, name: ch })) return;
+
     b.disabled = true;
     try {
-      const r = await api(`/api/channel/${ch}/${act}`, { method: "POST" });
-      toast(r.started || r.output || "تم");
-      await load();
+      const r = await api(`/api/channel/${encodeURIComponent(ch)}/${act}`, { method: "POST" });
+      if (r.started === false) toast(r.note || "قيد التشغيل بالفعل", true);
+      else toast(r.id ? `بدأت: ${r.id}` : (r.output || "تم"));
+      await loadOverview();
     } catch (err) { toast(err.message, true); }
     finally { b.disabled = false; }
     return;
   }
 
   if (b.dataset.del) {
-    const name = decodeURIComponent(b.dataset.del);
-    if (!confirm(`حذف ${name}؟`)) return;
+    const name = b.dataset.del;
+    const ok = await confirmBox({
+      title: "حذف الملف؟",
+      body: "المسارات المبنيّة من هذا الملف تبقى في الكاش حتى تُمسح يدويًا.",
+      name, verb: "احذف",
+    });
+    if (!ok) return;
     try {
-      const r = await api(`/api/media/${kind}/${b.dataset.del}`, { method: "DELETE" });
-      toast(r.note ? `${r.deleted} — ${r.note}` : r.deleted);
-      await load();
+      const r = await api(`/api/media/${kind}/${encodeURIComponent(name)}`, { method: "DELETE" });
+      toast(r.deleted + " — " + (r.note || ""));
+      await loadMedia(kind, true);
     } catch (err) { toast(err.message, true); }
-    return;
   }
-
-  if (b.id === "refresh") load();
 });
 
-// -- upload ----------------------------------------------------------------
-// Sent as a raw body rather than multipart: the server is http.server, and a
-// stream straight to disk avoids buffering a recitation in memory.
-function put(file) {
-  return new Promise((resolve, reject) => {
-    const folder = kind === "audio" ? (prompt(`مجلد الشيخ لـ ${file.name}`, "minshawi") || "").trim() : "";
-    if (kind === "audio" && !folder) return reject(new Error("لُغي"));
-    const path = `/api/media/${kind}/${folder ? encodeURIComponent(folder) + "/" : ""}${encodeURIComponent(file.name)}`;
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", path);
-    if (TOKEN) xhr.setRequestHeader("X-Token", TOKEN);
-    xhr.upload.onprogress = ev => {
-      if (ev.lengthComputable) $("#prog").style.width = (ev.loaded / ev.total * 100) + "%";
-    };
-    xhr.onload = () => {
-      let b = {}; try { b = JSON.parse(xhr.responseText); } catch {}
-      xhr.status < 400 ? resolve(b) : reject(new Error(b.error || xhr.statusText));
-    };
-    xhr.onerror = () => reject(new Error("فشل الرفع"));
-    xhr.send(file);
-  });
-}
-
-async function upload(files) {
-  for (const f of files) {
-    $("#prog").style.width = "0%";
-    try {
-      const r = await put(f);
-      toast(`${r.saved} — ${fmt(r.size)}`);
-    } catch (e) { toast(`${f.name}: ${e.message}`, true); }
-  }
-  $("#prog").style.width = "0%";
-  load();
-}
-
+$("#search").addEventListener("input", e => { query = e.target.value; renderMedia(); });
+$("#folder").addEventListener("change", e => { $("#newfolder").hidden = e.target.value !== "__new__"; });
 $("#file").addEventListener("change", e => { upload(e.target.files); e.target.value = ""; });
+
 const drop = $("#drop");
-["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => {
-  e.preventDefault(); drop.classList.add("hot");
-}));
-["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => {
-  e.preventDefault(); drop.classList.remove("hot");
-}));
+["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("hot"); }));
+["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("hot"); }));
 drop.addEventListener("drop", e => { if (e.dataTransfer.files.length) upload(e.dataTransfer.files); });
 
-load();
-// Only to follow a running build or sync; idle polling would walk the whole
-// cache tree every few seconds for nothing.
-setInterval(() => { if (state.jobs && state.jobs.some(j => j.running)) load(); }, 5000);
+// A hidden tab does not need to poll a server with two cores.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) clearTimeout(pollTimer);
+  else loadOverview();
+});
+
+renderTabs();
+loadOverview();
+loadMedia(kind);
+loadCache(false);
 </script>
 </body>
 </html>
