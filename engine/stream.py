@@ -38,7 +38,7 @@ from urllib.parse import urlsplit
 from . import config as cfg_mod
 from . import cache as cache_mod
 from . import quran, track as track_mod
-from .ffmpeg import ffmpeg_bin, span_of
+from .ffmpeg import duration_of, ffmpeg_bin, span_of
 from .selector import Selector
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -65,6 +65,10 @@ class ChannelStreamer:
         self.cfg = cfg_mod.load_channel(channel)
         self.name = self.cfg["name"]
         self.stop_event = threading.Event()
+        # audio path -> seconds, filled lazily by _by_render_priority.
+        self._durations: dict[Path, float] = {}
+        # audio path -> the rendering of it that played last time.
+        self._last_variant: dict[Path, Path] = {}
         # Where the next track starts on the stream's clock. Reset on every
         # ffmpeg start: a reconnect is a new timeline for YouTube.
         self.ts_cursor: float | None = None
@@ -137,17 +141,78 @@ class ChannelStreamer:
         return chosen, chosen in images
 
     def ready_tracks(self) -> list[tuple[Path, Path]]:
-        """(audio, rendered .ts) pairs already on disk, ready to play now."""
+        """Every (audio, rendered .ts) pair on disk, ready to play now.
+
+        A recitation can have more than one rendered track -- the same audio
+        over a different background -- and all of them are returned. Stopping
+        at the first, as this used to, meant a surah was welded to one picture
+        for as long as it stayed in the cache: al-Ikhlas came round every time
+        over the same photograph. The extra renders only mean anything if the
+        feeder can see them, so it does the choosing.
+        """
         images, videos = cfg_mod.visual_pool(self.cfg)
         backgrounds = images + videos
         ready = []
         for audio in cfg_mod.audio_pool(self.cfg):
             for background in backgrounds:
-                found = track_mod.existing_track(self.cfg, audio, background)
+                # playable, not existing: a track rendered under an earlier
+                # caption style still plays perfectly well and keeps the
+                # channel fed while its replacement is encoded.
+                found = track_mod.playable_track(self.cfg, audio, background)
                 if found:
                     ready.append((audio, found))
-                    break
         return ready
+
+    @staticmethod
+    def _variants_by_audio(ready: list[tuple[Path, Path]]) -> dict[Path, list[Path]]:
+        """Group the ready pairs by recitation, keeping every background."""
+        grouped: dict[Path, list[Path]] = {}
+        for audio, ts in ready:
+            grouped.setdefault(audio, []).append(ts)
+        return grouped
+
+    def _pick_variant(self, audio: Path, options: list[Path]) -> Path:
+        """Which rendering of `audio` to play, avoiding the one played last.
+
+        Kept per recitation rather than globally: what should not repeat is
+        this surah's own picture from its own previous turn, which may have
+        been an hour and forty tracks ago. A global history would not remember
+        that far back, and would be spent on tracks that are not competing.
+        """
+        if len(options) == 1:
+            return options[0]
+        previous = self._last_variant.get(audio)
+        fresh = [q for q in options if q != previous] or list(options)
+        choice = random.choice(fresh)
+        self._last_variant[audio] = choice
+        return choice
+
+    def _by_render_priority(self) -> list[Path]:
+        """The recitation pool, shortest first.
+
+        Order matters more than it looks. The pool's own order is the order of
+        the mushaf, so the first unrendered file after a cache rebuild is
+        al-Baqarah -- five hours of recitation that takes hours to encode and
+        holds the queue the whole time. The channel meanwhile loops whatever
+        few tracks already exist, which is what a listener actually hears: the
+        same handful of short surahs coming round every quarter of an hour.
+
+        Building shortest-first turns that around. The same encoder time buys
+        dozens of surahs instead of one, so the rotation widens within the hour
+        and the long recitations arrive later, when there is already plenty on
+        disk to play behind them. Nothing renders less -- it renders in the
+        order that keeps the stream worth listening to while it does.
+
+        Durations are memoised because this runs before every single build and
+        each miss is an ffprobe per file across the whole pool.
+        """
+        pool = list(cfg_mod.audio_pool(self.cfg))
+        for audio in pool:
+            if audio not in self._durations:
+                self._durations[audio] = duration_of(audio) or 0.0
+        # Unprobeable files sort last rather than first: a zero would put a
+        # broken mp3 at the head of the queue on every pass.
+        return sorted(pool, key=lambda a: self._durations[a] or float("inf"))
 
     def _pending_pair(self) -> tuple[Path, Path, bool] | None:
         """The next (audio, background) combination with no rendered track.
@@ -163,15 +228,24 @@ class ChannelStreamer:
         backgrounds = images + videos
         if not backgrounds:
             return None
-        for audio in cfg_mod.audio_pool(self.cfg):
-            unrendered = [
-                b for b in backgrounds
-                if not track_mod.existing_track(self.cfg, audio, b)
-            ]
-            if len(unrendered) == len(backgrounds):
-                # Nothing rendered for this recitation yet -- pick any visual.
-                chosen = random.choice(unrendered)
-                return audio, chosen, chosen in images
+
+        pool = self._by_render_priority()
+        missing = {
+            audio: [b for b in backgrounds
+                    if not track_mod.existing_track(self.cfg, audio, b)]
+            for audio in pool
+        }
+
+        # Breadth before depth. Every recitation gets its first rendering
+        # before any gets a second, so the mushaf is covered as early as the
+        # encoder allows and no surah is missing while another already has
+        # four pictures. Only once the whole pool is covered does the second
+        # pass begin, and the rotation starts varying what it shows.
+        for depth in range(len(backgrounds)):
+            for audio in pool:
+                if len(backgrounds) - len(missing[audio]) == depth and missing[audio]:
+                    chosen = random.choice(missing[audio])
+                    return audio, chosen, chosen in images
         return None
 
     def build_one(self) -> bool | None:
@@ -244,8 +318,9 @@ class ChannelStreamer:
                 self.stop_event.wait(10)
                 continue
 
-            audio = self.audio_selector.pick([a for a, _ in ready])
-            ts = dict(ready).get(audio)
+            grouped = self._variants_by_audio(ready)
+            audio = self.audio_selector.pick(list(grouped))
+            ts = self._pick_variant(audio, grouped[audio]) if audio else None
             if not audio or not ts or not ts.exists():
                 self.stop_event.wait(5)
                 continue

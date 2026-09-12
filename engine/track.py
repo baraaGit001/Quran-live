@@ -33,6 +33,35 @@ BG_DIR = ROOT / "cache" / "backgrounds"
 SEGMENT_DIR = ROOT / "cache" / "segments"
 
 
+# Opacity steps a verse passes through on its way in and out.
+#
+# The verses used to cut straight from nothing to fully lit and back, which is
+# the one thing on screen that moves -- a hard switch under a still background
+# reads as a glitch rather than as the text arriving. A fade is the obvious
+# fix, and the obvious way to get one is a time-varying alpha in the filter
+# graph. That would mean geq, per pixel per frame, for the length of every
+# recitation, on a box with two cores and no hardware encoder.
+#
+# So the ramp is baked into the caption timeline instead. Each verse is
+# rendered once at each opacity and the concat list simply holds the dim copies
+# briefly on the way in and on the way out. The fade costs disk and nothing at
+# all at render time: it is still one concat of stills, exactly as before.
+FADE_LEVELS = (0.18, 0.42, 0.68, 0.88)
+
+# Long enough to read as a fade rather than a flicker, short enough that a
+# verse is never late. Both ends together are capped at a fraction of the
+# ayah so a two-second verse is not all ramp and no text.
+FADE_SECONDS = 0.36
+FADE_MIN_HOLD = 0.40
+
+
+def _fade_for(duration: float) -> float:
+    """How long each ramp may be for an ayah of this length."""
+    room = (duration - FADE_MIN_HOLD) / 2
+    fade = min(FADE_SECONDS, max(0.0, room))
+    return fade if fade >= 0.08 else 0.0
+
+
 def _hash(*parts: str) -> str:
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
 
@@ -88,7 +117,12 @@ def build_captions(cfg: dict, audio: Path, entries: list[dict]) -> Path | None:
     max_band_h = max(1, int(cfg["video"]["height"]) - margin)
 
     key = _hash(str(audio), str(font), str(size), colour, str(wrap_at),
-                str(len(entries)), str(band_w), str(max_band_h))
+                str(len(entries)), str(band_w), str(max_band_h),
+                # The ramp changes what is on screen, so it has to change the
+                # key -- otherwise every caption set already on disk would be
+                # reused unfaded and the change would appear to do nothing.
+                "fade:" + ",".join(str(x) for x in FADE_LEVELS),
+                f"{FADE_SECONDS}:{FADE_MIN_HOLD}")
     out_dir = CAPTION_DIR / key
     out_dir.mkdir(parents=True, exist_ok=True)
     listing = out_dir / "list.txt"
@@ -148,21 +182,37 @@ def build_captions(cfg: dict, audio: Path, entries: list[dict]) -> Path | None:
     # long one -- every verse a different size on screen. Capping means the
     # rendered font size is what decides how big text looks, uniformly, and
     # scaling only ever kicks in to rescue a verse too wide for the frame.
+    def _variants(index: int) -> dict[str, Path]:
+        """Paths of the full-opacity verse and each of its dimmed copies."""
+        out = {"full": out_dir / f"{index:04d}.png"}
+        for level in FADE_LEVELS:
+            out[level] = out_dir / f"{index:04d}.a{int(level * 100):02d}.png"
+        return out
+
     lines: list[str] = []
     cursor = 0.0
     for index, raw, entry in raws:
-        png = out_dir / f"{index:04d}.png"
-        if not png.exists():
+        paths = _variants(index)
+        if not all(q.exists() for q in paths.values()):
+            # One ffmpeg per verse, not one per opacity: the source is decoded
+            # and fitted once and the graph splits it into every copy needed.
+            # Rendering the levels separately would multiply the number of
+            # processes by five across six thousand verses.
+            fit = (f"[0:v]format=rgba,"
+                   f"scale='min(iw,{band_w})':'min(ih,{band_h})'"
+                   f":force_original_aspect_ratio=decrease,"
+                   f"pad={band_w}:{band_h}:(ow-iw)/2:(oh-ih)/2:color=#00000000,"
+                   f"split={len(FADE_LEVELS) + 1}[full]")
+            graph = [fit + "".join(f"[s{i}]" for i in range(len(FADE_LEVELS)))]
+            outputs = ["-map", "[full]", "-frames:v", "1", str(paths["full"])]
+            for i, level in enumerate(FADE_LEVELS):
+                graph.append(f"[s{i}]colorchannelmixer=aa={level}[o{i}]")
+                outputs += ["-map", f"[o{i}]", "-frames:v", "1", str(paths[level])]
             ok = subprocess.run(
                 [ff, "-y", "-hide_banner", "-loglevel", "error", "-i", str(raw),
-                 "-filter_complex",
-                 f"[0:v]format=rgba,"
-                 f"scale='min(iw,{band_w})':'min(ih,{band_h})'"
-                 f":force_original_aspect_ratio=decrease,"
-                 f"pad={band_w}:{band_h}:(ow-iw)/2:(oh-ih)/2:color=#00000000[o]",
-                 "-map", "[o]", "-frames:v", "1", str(png)],
+                 "-filter_complex", ";".join(graph)] + outputs,
                 capture_output=True,
-            ).returncode == 0 and png.exists()
+            ).returncode == 0 and all(q.exists() for q in paths.values())
             if not ok:
                 return None
         raw.unlink(missing_ok=True)
@@ -170,15 +220,31 @@ def build_captions(cfg: dict, audio: Path, entries: list[dict]) -> Path | None:
         if entry["start"] > cursor + 0.05:
             lines.append(f"file '{blank.as_posix()}'")
             lines.append(f"duration {entry['start'] - cursor:.3f}")
-        lines.append(f"file '{png.as_posix()}'")
-        lines.append(f"duration {max(0.1, entry['end'] - entry['start']):.3f}")
+
+        span = max(0.1, entry["end"] - entry["start"])
+        fade = _fade_for(span)
+        if fade:
+            step = fade / len(FADE_LEVELS)
+            for level in FADE_LEVELS:
+                lines.append(f"file '{paths[level].as_posix()}'")
+                lines.append(f"duration {step:.3f}")
+        lines.append(f"file '{paths['full'].as_posix()}'")
+        lines.append(f"duration {span - 2 * fade:.3f}")
+        if fade:
+            step = fade / len(FADE_LEVELS)
+            for level in reversed(FADE_LEVELS):
+                lines.append(f"file '{paths[level].as_posix()}'")
+                lines.append(f"duration {step:.3f}")
         cursor = entry["end"]
 
     if not lines:
         return None
-    # The concat demuxer ignores the final entry's duration unless the file is
-    # repeated, so the last image is listed twice.
-    lines.append(lines[-2])
+    # The concat demuxer ignores the last entry's duration unless the file is
+    # repeated, so the list ends on a transparent frame listed twice -- the
+    # verse fades to nothing rather than the final image being held.
+    lines.append(f"file '{blank.as_posix()}'")
+    lines.append("duration 0.500")
+    lines.append(f"file '{blank.as_posix()}'")
     listing.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return listing
 
@@ -275,6 +341,35 @@ def _segment_signature() -> str:
     return ",".join(parts)
 
 
+# How the verses are animated, as far as the cache is concerned. Anything that
+# changes what the caption layer looks like belongs here, so a track rendered
+# before the change is recognised as out of date. It is kept separate from the
+# rest of the key so the previous recipe can still be computed -- see
+# playable_track.
+CAPTION_STYLE = "fade:" + ",".join(str(x) for x in FADE_LEVELS) + \
+                f"|{FADE_SECONDS}:{FADE_MIN_HOLD}"
+
+
+def _key_parts(cfg: dict, audio: Path, background: Path) -> list[str] | None:
+    """Everything about a track except how its captions are animated."""
+    try:
+        mtime = audio.stat().st_mtime_ns
+    except OSError:
+        return None
+    entries = quran.load_timings(audio)
+    cfg = resolve_fit(cfg, background)
+    v = cfg["video"]
+    return [
+        str(audio), str(mtime), str(background),
+        str(v["width"]), str(v["height"]), str(v["fps"]), str(v["bitrate"]),
+        str(v.get("preset", "faster")),
+        str(v.get("fit", "blur")), str(cfg.get("font", "")),
+        str((cfg.get("overlay") or {}).get("font_size", 54)),
+        str(len(entries or [])),
+        str(_rotation_seconds(cfg)), _pool_signature(cfg), _rotation_signature(cfg),
+    ]
+
+
 def track_key(cfg: dict, audio: Path, background: Path) -> str | None:
     """The cache key for one (recitation, background) pair, without building it.
 
@@ -283,31 +378,63 @@ def track_key(cfg: dict, audio: Path, background: Path) -> str | None:
     discovering that mid-stream -- with ffmpeg already waiting on the pipe --
     would stall the broadcast.
     """
-    try:
-        mtime = audio.stat().st_mtime_ns
-    except OSError:
-        return None
-    entries = quran.load_timings(audio)
-    cfg = resolve_fit(cfg, background)
-    v = cfg["video"]
-    return _hash(
-        str(audio), str(mtime), str(background),
-        str(v["width"]), str(v["height"]), str(v["fps"]), str(v["bitrate"]),
-        str(v.get("preset", "faster")),
-        str(v.get("fit", "blur")), str(cfg.get("font", "")),
-        str((cfg.get("overlay") or {}).get("font_size", 54)),
-        str(len(entries or [])),
-        str(_rotation_seconds(cfg)), _pool_signature(cfg), _rotation_signature(cfg),
-    )
+    parts = _key_parts(cfg, audio, background)
+    return _hash(*parts, CAPTION_STYLE) if parts else None
+
+
+def _superseded_key(cfg: dict, audio: Path, background: Path) -> str | None:
+    """The key this pair had before the caption style entered the key.
+
+    Tracks rendered under the old recipe are still perfectly watchable -- they
+    simply have verses that cut in and out instead of fading. Being able to
+    name them is what makes the change safe to deploy: the channel keeps
+    playing them while the replacements are encoded, instead of every track on
+    disk becoming unreachable the moment the key moves and the stream going
+    quiet with ffmpeg sitting on an empty pipe. That has happened twice; it is
+    not a thing to leave to luck.
+    """
+    parts = _key_parts(cfg, audio, background)
+    return _hash(*parts) if parts else None
 
 
 def existing_track(cfg: dict, audio: Path, background: Path) -> Path | None:
-    """The rendered file for this pair if it is already on disk, else None."""
+    """The current rendering of this pair, or None if it has yet to be built.
+
+    Deliberately blind to superseded renderings: this is what the builder asks,
+    and an out-of-date track has to read as missing or it would never be
+    replaced.
+    """
     key = track_key(cfg, audio, background)
     if not key:
         return None
     candidate = TRACK_DIR / f"{key}.ts"
     return candidate if candidate.exists() else None
+
+
+def playable_track(cfg: dict, audio: Path, background: Path) -> Path | None:
+    """Anything on disk that can go on air for this pair, current or not.
+
+    This is what the streamer asks. It prefers the current rendering and falls
+    back to a superseded one, so a style change costs the viewer nothing while
+    it rolls through the cache.
+    """
+    found = existing_track(cfg, audio, background)
+    if found:
+        return found
+    old = _superseded_key(cfg, audio, background)
+    if not old:
+        return None
+    candidate = TRACK_DIR / f"{old}.ts"
+    return candidate if candidate.exists() else None
+
+
+def drop_superseded(cfg: dict, audio: Path, background: Path) -> None:
+    """Delete the old rendering of a pair once the new one is in place."""
+    if not existing_track(cfg, audio, background):
+        return
+    old = _superseded_key(cfg, audio, background)
+    if old:
+        (TRACK_DIR / f"{old}.ts").unlink(missing_ok=True)
 
 
 def build_track(cfg: dict, audio: Path, background: Path, is_image: bool) -> Path | None:
@@ -321,18 +448,15 @@ def build_track(cfg: dict, audio: Path, background: Path, is_image: bool) -> Pat
     if duration is None:
         return None
 
+    # Computed before resolve_fit, which track_key applies itself; calling it
+    # twice on the same cfg is harmless but the key must come from the one
+    # function so the builder and the streamer can never disagree about it.
+    key = track_key(cfg, audio, background)
+    if not key:
+        return None
     cfg = resolve_fit(cfg, background)
     v = cfg["video"]
     a = cfg["audio"]
-    key = _hash(
-        str(audio), str(audio.stat().st_mtime_ns), str(background),
-        str(v["width"]), str(v["height"]), str(v["fps"]), str(v["bitrate"]),
-        str(v.get("preset", "faster")),
-        str(v.get("fit", "blur")), str(cfg.get("font", "")),
-        str((cfg.get("overlay") or {}).get("font_size", 54)),
-        str(len(entries or [])),
-        str(_rotation_seconds(cfg)), _pool_signature(cfg), _rotation_signature(cfg),
-    )
     # Rendered straight to MPEG-TS, which is the form the streamer feeds into
     # ffmpeg. Going through mp4 first and remuxing would keep two copies of
     # every track on disk -- ~220GB for the full mujawwad Quran instead of
@@ -409,4 +533,7 @@ def build_track(cfg: dict, audio: Path, background: Path, is_image: bool) -> Pat
         partial.unlink(missing_ok=True)
         return None
     os.replace(partial, out)
+    # The superseded rendering of this pair has just been replaced on air, so
+    # it is only taking up disk now.
+    drop_superseded(cfg, audio, background)
     return out
