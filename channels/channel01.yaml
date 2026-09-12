@@ -32,7 +32,10 @@ video:
   width: 1280
   height: 720
   fps: 30
-  bitrate: "2000k"
+  bitrate: "3500k"
   # crop | blur | pad | auto  -- see engine/prerender.py
   fit: "crop"
   image_duration: 20
+
+  # مؤقتًا: التدوير مُطفأ أثناء إعادة بناء المقاطع
+  visual_rotate_seconds: 0

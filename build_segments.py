@@ -36,10 +36,16 @@ FF = ffmpeg_bin()
 
 # Identical on every segment: the concat demuxer rejects a mismatch, and a
 # silent mismatch shows up as a stream that stops after the first clip.
+#
+# Quality is set by CRF, not by the output bitrate. A segment is never
+# broadcast -- it is re-encoded into every track that uses it -- so giving it
+# the same 2 Mbps the stream goes out at stacked two lossy generations and
+# threw away detail the viewer could have had. CRF 16 is near-transparent and
+# costs only disk, once.
+CRF = int(V.get("segment_crf", 16))
 ENCODE = [
-    "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high",
-    "-b:v", str(V["bitrate"]), "-maxrate", str(V["bitrate"]),
-    "-bufsize", f"{int(str(V['bitrate']).rstrip('k')) * 2}k",
+    "-c:v", "libx264", "-preset", "fast", "-profile:v", "high",
+    "-crf", str(CRF),
     "-g", str(GOP), "-keyint_min", str(GOP), "-sc_threshold", "0",
     "-pix_fmt", "yuv420p", "-an", "-f", "mpegts",
 ]

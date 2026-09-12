@@ -7,11 +7,23 @@ video:
   width: 1280
   height: 720
   fps: 30
-  # This content is a still (or near-still) background with text, which is
-  # exactly what H.264 compresses best -- 2 Mbps at 720p30 looks clean here
-  # where a fast-moving scene would not. It also matters at scale: the full
-  # mujawwad Quran is ~81 hours, so every extra Mbps is ~37 GB on disk.
-  bitrate: "2000k"
+  # 2 Mbps was chosen when every background was one still held for the whole
+  # recitation -- the easiest thing H.264 will ever be asked to compress. The
+  # backgrounds move now, and the comment that lived here said in as many
+  # words that a fast-moving scene would not survive that bitrate. It did not.
+  # It still matters at scale: the full mujawwad Quran is ~81 hours, so every
+  # extra Mbps is ~37 GB on disk and ~0.35 TB/month of egress per channel.
+  bitrate: "3500k"
+  # x264 preset for the final track. Rendering is a one-off per recitation and
+  # already slower than realtime, so a step down from veryfast buys real
+  # quality for time that is spent once.
+  preset: "faster"
+  # Quality of the intermediate rotation segments, as x264 CRF. These are not
+  # broadcast; they are re-encoded into every track that uses them. Giving them
+  # a bitrate as low as the output's meant two lossy generations stacked on top
+  # of each other, which is most of what went wrong. Near-transparent here
+  # costs disk once and nothing on air.
+  segment_crf: 16
   # How a source that is not 16:9 fills the frame: blur | crop | pad
   fit: "blur"
   # Seconds per still image when building a loop out of images.

@@ -123,8 +123,7 @@ def build_segment(cfg: dict, source: Path, overlay_png: Path | None, is_image: b
         "-an",
         "-c:v", "libx264",
         # veryfast is the honest ceiling for a one-off encode on Neoverse-N1;
-        # slower presets would buy quality this content cannot show off anyway.
-        "-preset", "veryfast",
+        "-preset", str(v.get("preset", "faster")),
         "-tune", "stillimage" if is_image else "film",
         "-b:v", str(v["bitrate"]),
         "-maxrate", str(v["bitrate"]),

@@ -243,9 +243,36 @@ def build_background_loop(cfg: dict, background: Path, duration: float) -> Path 
     return listing
 
 
+def _rotation_signature(cfg: dict) -> str:
+    """The segment pool as far as *this* track is concerned.
+
+    Empty when rotation is off: the track is then one still held for its whole
+    length and nothing about the pool can change how it looks, so rebuilding
+    the pool must not invalidate it. Reading the pool unconditionally is what
+    took the live channel off air mid-rebuild.
+    """
+    if _rotation_seconds(cfg) <= 0:
+        return ""
+    return _segment_signature()
+
+
 def _segment_signature() -> str:
-    """Names of the built segments, so rebuilding them re-keys every track."""
-    return ",".join(q.name for q in segment_pool())
+    """What the segment pool is right now, names and contents both.
+
+    Names alone are not enough. Rebuilding the pool at a different quality
+    writes the same filenames with different pictures inside, and a signature
+    that only saw names would report every existing track as still valid --
+    the re-render would silently be skipped. Size and mtime move whenever the
+    bytes do, which is exactly when a track has to be rendered again.
+    """
+    parts = []
+    for q in segment_pool():
+        try:
+            st = q.stat()
+            parts.append(f"{q.name}:{st.st_size}:{int(st.st_mtime)}")
+        except OSError:
+            parts.append(q.name)
+    return ",".join(parts)
 
 
 def track_key(cfg: dict, audio: Path, background: Path) -> str | None:
@@ -266,10 +293,11 @@ def track_key(cfg: dict, audio: Path, background: Path) -> str | None:
     return _hash(
         str(audio), str(mtime), str(background),
         str(v["width"]), str(v["height"]), str(v["fps"]), str(v["bitrate"]),
+        str(v.get("preset", "faster")),
         str(v.get("fit", "blur")), str(cfg.get("font", "")),
         str((cfg.get("overlay") or {}).get("font_size", 54)),
         str(len(entries or [])),
-        str(_rotation_seconds(cfg)), _pool_signature(cfg), _segment_signature(),
+        str(_rotation_seconds(cfg)), _pool_signature(cfg), _rotation_signature(cfg),
     )
 
 
@@ -299,10 +327,11 @@ def build_track(cfg: dict, audio: Path, background: Path, is_image: bool) -> Pat
     key = _hash(
         str(audio), str(audio.stat().st_mtime_ns), str(background),
         str(v["width"]), str(v["height"]), str(v["fps"]), str(v["bitrate"]),
+        str(v.get("preset", "faster")),
         str(v.get("fit", "blur")), str(cfg.get("font", "")),
         str((cfg.get("overlay") or {}).get("font_size", 54)),
         str(len(entries or [])),
-        str(_rotation_seconds(cfg)), _pool_signature(cfg), _segment_signature(),
+        str(_rotation_seconds(cfg)), _pool_signature(cfg), _rotation_signature(cfg),
     )
     # Rendered straight to MPEG-TS, which is the form the streamer feeds into
     # ffmpeg. Going through mp4 first and remuxing would keep two copies of
@@ -364,7 +393,7 @@ def build_track(cfg: dict, audio: Path, background: Path, is_image: bool) -> Pat
         "-filter_complex", chain,
         "-map", "[vout]", "-map", "1:a:0",
         "-t", f"{duration:.3f}",
-        "-c:v", "libx264", "-preset", "veryfast",
+        "-c:v", "libx264", "-preset", str(v.get("preset", "faster")),
         "-b:v", str(v["bitrate"]), "-maxrate", str(v["bitrate"]),
         "-bufsize", f"{int(str(v['bitrate']).rstrip('k')) * 2}k",
         "-g", str(gop), "-keyint_min", str(gop), "-sc_threshold", "0",
