@@ -21,3 +21,8 @@ __pycache__/
 assets/_removed-portrait/
 
 assets/_replaced-lowres/
+
+# Runtime HLS output and private payment details
+site/live/
+site/support.json
+*.bak

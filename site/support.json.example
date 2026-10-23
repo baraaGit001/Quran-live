@@ -1,0 +1,11 @@
+{
+  "_comment": "امسح اللي مش هتستخدمه. url = منصة (Ko-fi مثلا). methods = تحويل مباشر.",
+
+  "url": "",
+  "label": "تبرّع",
+
+  "methods": [
+    { "label": "إنستاباي", "value": "yourname@instapay" },
+    { "label": "فودافون كاش", "value": "01XXXXXXXXX" }
+  ]
+}

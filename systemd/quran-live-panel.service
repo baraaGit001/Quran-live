@@ -5,11 +5,29 @@ After=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h/quran-live
-# Loopback only. The panel starts and stops live broadcasts and writes into the
-# asset pools, so it is reached over an SSH tunnel rather than exposed:
-#   ssh -N -L 8770:127.0.0.1:8770 <host>
-Environment=QURAN_WEB_HOST=127.0.0.1
-Environment=QURAN_WEB_PORT=8770
+# Reachable from the proxy container only, which is where /admin is published.
+#
+# Rootless podman has no bridge address on the host: the proxy reaches the host
+# through pasta, which rewrites the source to the host's own 10.0.0.221, so
+# loopback is unreachable from the container and a bridge address does not
+# exist to bind to. The bind is therefore 0.0.0.0 and the *firewall* is what
+# confines it -- a rich rule accepting 8097 from 10.0.0.221/32 alone:
+#
+#   firewall-cmd --permanent --add-rich-rule='rule family=ipv4 \
+#     source address=10.0.0.221/32 port port=8097 protocol=tcp accept'
+#
+# 8097 is deliberately NOT in firewalld's open port list, so the panel is
+# unreachable from the internet even though it listens on every interface.
+# Removing that rich rule breaks /admin; opening 8097 publicly exposes a panel
+# that starts and stops broadcasts, guarded by the token alone.
+#
+# 8770 was the old port and now belongs to the dfteam app; it would not bind.
+Environment=QURAN_WEB_HOST=0.0.0.0
+Environment=QURAN_WEB_PORT=8097
+# QURAN_WEB_TOKEN lives here. server.py refuses to bind anything but loopback
+# without it, which is the behaviour keeping an unauthenticated panel off the
+# network if this file is ever edited carelessly.
+EnvironmentFile=%h/quran-live/.env
 ExecStart=/usr/bin/python3 %h/quran-live/web/server.py
 Restart=always
 RestartSec=5
@@ -26,7 +44,7 @@ ProtectControlGroups=true
 ProtectKernelTunables=true
 RestrictSUIDSGID=true
 # It must write uploads into assets/ as well as the runtime directories.
-ReadWritePaths=%h/quran-live/assets %h/quran-live/cache %h/quran-live/state %h/quran-live/logs %h/quran-live/data
+ReadWritePaths=%h/quran-live/assets %h/quran-live/cache %h/quran-live/state %h/quran-live/logs %h/quran-live/data %h/quran-live/site
 
 [Install]
 WantedBy=default.target

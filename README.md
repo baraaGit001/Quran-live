@@ -253,3 +253,110 @@ never root.
   encoding and disk. Variety comes from having several recitations.
 - Changing the font, resolution or overlay settings invalidates every cached
   track, so they must all be re-rendered.
+
+---
+
+## Self-hosted streaming (HLS)
+
+A channel with `stream.platform: "hls"` publishes to this server instead of to a
+platform. Nothing else about the pipeline changes: the same pre-rendered tracks
+are stream-copied, so the CPU cost is the same as pushing RTMP.
+
+One ffmpeg writes two renditions from the one pipe, both stream copies:
+
+    site/live/<channel>/master.m3u8     video + audio-only
+    site/live/<channel>/video/          ~3.5 Mbps, 720p
+    site/live/<channel>/audio/          ~128 kbps, no video
+    site/live/<channel>/status.json     what the website shows as "now playing"
+
+The audio-only rendition is not a nicety. Egress is now ours to pay: a viewer on
+the video rendition costs ~1.5 GB/hour, a listener ~0.06 GB/hour. Most of the
+audience is listening, and on Oracles 10 TB/month that is the difference
+
+---
+
+## Self-hosted streaming (HLS)
+
+A channel with `stream.platform: "hls"` publishes to this server instead of to a
+platform. Nothing else about the pipeline changes: the same pre-rendered tracks
+are stream-copied, so the CPU cost is the same as pushing RTMP.
+
+One ffmpeg writes two renditions from the one pipe, both stream copies:
+
+    site/live/<channel>/master.m3u8     video + audio-only
+    site/live/<channel>/video/          ~3.5 Mbps, 720p
+    site/live/<channel>/audio/          ~128 kbps, no video
+    site/live/<channel>/status.json     what the website shows as "now playing"
+
+The audio-only rendition is not a nicety. Egress is ours to pay now: a viewer on
+the video rendition costs ~1.5 GB/hour, a listener ~0.06 GB/hour. Most of the
+audience is listening rather than watching, and against the 10 TB/month that
+Oracle includes, that is the difference between the stream surviving an audience
+and not.
+
+`hls_list_size 8` at `hls_time 6` keeps a ~48 second window on disk and deletes
+behind it, so the published directory stays under ~25 MB per channel however
+long the stream runs. **It is never a recording** -- nothing accumulates.
+
+### Serving it
+
+    site/  ->  quran-site (nginx:alpine, podman, network pricelens_external)
+           ->  pricelens-proxy vhost  ->  https://quran.run.place
+
+The vhost lives in `~/pricelens/docker/nginx-upstreams/quran.conf`, alongside
+the dfteam one, because `nginx.prod.conf` is tracked in the pricelens checkout
+and a git operation there would drop it. Its certificate renews with the others
+through `~/pricelens/scripts/renew-cert.sh`.
+
+The service writes into `site/`, so `ReadWritePaths` in the unit includes it:
+`ProtectHome=read-only` makes every segment write fail otherwise. `UMask` is
+pinned in the unit too, because the web server reads those files as a different
+user inside a container.
+
+The status file gets a 30-second heartbeat while ffmpeg runs. The website treats
+a stale timestamp as a dead stream -- it has to, because a supervisor that was
+killed leaves a status behind that says "running" forever -- and a single track
+can play for half an hour without anything changing.
+
+### A support link
+
+Copy `site/support.json.example` to `site/support.json` and fill in the URL. The
+card stays hidden while that file is absent, so the page never shows a donate
+button that goes nowhere.
+
+Note what publishing here does *not* fix: if a strike was about rights to the
+recording, moving the same recording to your own domain does not resolve it, and
+taking donations against it makes the position worse rather than better. Confirm
+where the audio came from before adding a support link.
+
+### Adding a reciter
+
+One reciter is one channel. The website's picker is generated from the channel
+configs by `scripts/publish-channels.py`, which every channel unit runs before
+it starts, so the list follows what is deployed and the HTML is never touched.
+
+    mkdir -p assets/audio/husary
+    cp /path/to/*.mp3 assets/audio/husary/
+
+    sed -e 's/channel01/channel02/' channels/channel01.yaml > channels/channel02.yaml
+    # then edit channel02.yaml: audio_dir, reciter, style, overlay.text
+
+    ./live build --channel channel02        # one-off, slow: see the disk note
+    systemctl --user enable --now quran-live@channel02.service
+
+A channel with `enabled: false`, or one still pushing to a platform, is left out
+of the picker: there would be no local playlist for the page to play.
+
+**Disk is the real limit, not CPU.** A second stream costs ~0.5% of a core, but
+one reciter's rendered tracks are ~65 GB at the default 3500k. With ~70 GB free
+that is one more reciter and nothing else -- under `cache.min_free_gb`, which
+would then start evicting tracks and re-rendering them, spending hours of CPU to
+play a surah that was already finished.
+
+So give an additional channel a lower video bitrate:
+
+    video:
+      bitrate: "1200k"
+
+~24 GB instead of ~65 GB, and on a recitation over a mostly still background the
+difference is hard to see. The alternative is more disk.

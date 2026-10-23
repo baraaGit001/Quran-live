@@ -11,6 +11,10 @@ StartLimitBurst=10
 Type=simple
 WorkingDirectory=%h/quran-live
 EnvironmentFile=%h/quran-live/.env
+# Rebuilds site/channels.json from the channel configs, so the reciter
+# picker on the website follows what is actually deployed. Cheap,
+# idempotent, and it means adding a reciter never involves the HTML.
+ExecStartPre=/usr/bin/python3 %h/quran-live/scripts/publish-channels.py
 ExecStart=/usr/bin/python3 -m engine.stream %i
 Restart=always
 RestartSec=10
@@ -42,8 +46,15 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-# The only paths the service legitimately writes.
-ReadWritePaths=%h/quran-live/cache %h/quran-live/state %h/quran-live/logs %h/quran-live/data
+# The only paths the service legitimately writes. site/ holds the published
+# HLS window when the channel streams to our own website; ProtectHome=read-only
+# would otherwise make every segment write fail.
+ReadWritePaths=%h/quran-live/cache %h/quran-live/state %h/quran-live/logs %h/quran-live/data %h/quran-live/site
+# Segments are read by the web server, which runs as a different user in a
+# container. The interactive umask happens to be 022, but a service must not
+# depend on a login shell setting: without this, a stricter umask would publish
+# unreadable segments and the site would serve 403s with nothing in the logs.
+UMask=0022
 
 StandardOutput=journal
 StandardError=journal

@@ -45,6 +45,9 @@ ROOT = Path(__file__).resolve().parent.parent
 STATE_DIR = ROOT / "state"
 LOG_DIR = ROOT / "logs"
 TS_DIR = ROOT / "cache" / "ts"
+# Where the HLS playlists and segments are published when a channel streams to
+# its own website instead of to a platform. Served read-only by nginx.
+HLS_ROOT = ROOT / "site" / "live"
 
 # Ingest endpoints by platform. YouTube is the default and the only one with
 # no cap on how long a single stream may run; Facebook ends a stream after
@@ -58,6 +61,20 @@ INGEST = {
     "twitch": "rtmp://live.twitch.tv/app",
 }
 CHUNK = 188 * 1024  # a whole number of TS packets
+
+
+def _bits(value: object, fallback: int) -> int:
+    """Parse an ffmpeg-style rate ("3500k", "2M", 900000) into bits per second."""
+    text = str(value).strip().lower()
+    scale = 1
+    if text.endswith("k"):
+        scale, text = 1_000, text[:-1]
+    elif text.endswith("m"):
+        scale, text = 1_000_000, text[:-1]
+    try:
+        return int(float(text) * scale)
+    except ValueError:
+        return fallback
 
 
 class ChannelStreamer:
@@ -121,12 +138,24 @@ class ChannelStreamer:
             "current_track": self.current_track,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
+        body = json.dumps(payload, ensure_ascii=False, indent=2)
         try:
-            (STATE_DIR / f"{self.name}.status.json").write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            (STATE_DIR / f"{self.name}.status.json").write_text(body, encoding="utf-8")
         except OSError:
             pass
+        # The website reads the same status, and publishing it beside the
+        # playlists means the web server needs no second mount and no access to
+        # anything outside the directory it already serves. Written through a
+        # temporary file so a poll never reads a half-written object.
+        if self._is_hls():
+            try:
+                directory = self._hls_dir()
+                directory.mkdir(parents=True, exist_ok=True)
+                tmp = directory / ".status.json.tmp"
+                tmp.write_text(body, encoding="utf-8")
+                tmp.replace(directory / "status.json")
+            except OSError:
+                pass
 
     # ---------- track preparation ----------
 
@@ -408,7 +437,7 @@ class ChannelStreamer:
                     proc.kill()
         self.ts_cursor = cursor
 
-    # ---------- ffmpeg ----------
+    # ---------- platform ingest ----------
 
     def _rtmp_url(self) -> str:
         key = cfg_mod.stream_key(self.cfg)
@@ -452,13 +481,110 @@ class ChannelStreamer:
         netloc = ip if parts.port is None else f"{ip}:{parts.port}"
         return parts._replace(netloc=netloc).geturl()
 
+    # ---------- HLS (self-hosted) ----------
+
+    def _is_hls(self) -> bool:
+        """True when this channel publishes to our own site, not to a platform.
+
+        A strike lands on the channel, not on the software, and there is no
+        appeal worth waiting on when the whole point is an uninterrupted
+        recitation. Publishing HLS ourselves removes the third party: the same
+        finished tracks, the same stream copy, segmented to disk instead of
+        pushed to an ingest that can revoke the stream mid-ayah.
+        """
+        stream = self.cfg.get("stream", {}) or {}
+        return str(stream.get("platform", "youtube")).lower() == "hls"
+
+    def _hls_dir(self) -> Path:
+        stream = self.cfg.get("stream", {}) or {}
+        configured = stream.get("hls_dir")
+        base = Path(configured) if configured else HLS_ROOT
+        if not base.is_absolute():
+            base = ROOT / base
+        return base / self.name
+
+    def _write_master(self) -> None:
+        """The master playlist, written once rather than by ffmpeg.
+
+        ffmpeg can emit a master itself, but only as part of a var_stream_map
+        run that owns both renditions, and it rewrites the file on every
+        restart -- so a player holding the old one gets a 404 during the gap.
+        Two independent outputs plus a master we control means a reconnect
+        replaces only the media playlists, which players already re-poll.
+        """
+        video = self.cfg.get("video", {}) or {}
+        # Advertised bandwidth is the muxed rate, so audio counts too: a number
+        # below the real rate makes a player pick a rendition it cannot sustain.
+        vbits = _bits(video.get("bitrate", "3500k"), 3_500_000)
+        abits = _bits((self.cfg.get("audio", {}) or {}).get("bitrate", "128k"), 128_000)
+        width = int(video.get("width", 1280))
+        height = int(video.get("height", 720))
+        master = self._hls_dir() / "master.m3u8"
+        master.parent.mkdir(parents=True, exist_ok=True)
+        master.write_text(
+            "#EXTM3U\n"
+            "#EXT-X-VERSION:3\n"
+            # Audio first: most of the audience is listening rather than
+            # watching, and a player with no measured bandwidth yet starts on
+            # the first entry.
+            '#EXT-X-STREAM-INF:BANDWIDTH=%d,CODECS="mp4a.40.2"\n' % abits
+            + "audio/index.m3u8\n"
+            + '#EXT-X-STREAM-INF:BANDWIDTH=%d,RESOLUTION=%dx%d,'
+              'CODECS="avc1.640028,mp4a.40.2"\n' % (vbits + abits, width, height)
+            + "video/index.m3u8\n",
+            encoding="utf-8",
+        )
+
+    def _hls_outputs(self) -> list[str]:
+        """One ffmpeg, two renditions, no encoding in either.
+
+        The audio-only rendition is the reason this is worth doing: a listener
+        costs ~128 kbps instead of ~3.6 Mbps, and on a server that pays for its
+        own egress that is the difference between the stream surviving an
+        audience and not. Both are stream copies, so the second output is free.
+        """
+        directory = self._hls_dir()
+        args: list[str] = []
+        for kind, maps in (("audio", ["-map", "0:a"]),
+                           ("video", ["-map", "0:v", "-map", "0:a"])):
+            out = directory / kind
+            out.mkdir(parents=True, exist_ok=True)
+            args += [
+                *maps, "-c", "copy",
+                "-f", "hls",
+                # Segments are cut on keyframes and keyframe_interval is 2s, so
+                # 6s holds three of them: short enough that a viewer joins
+                # within a few seconds, long enough that the playlist is not
+                # rewritten constantly on a two-core box.
+                "-hls_time", "6",
+                "-hls_list_size", "8",
+                # Segments outlive the playlist by this many, so a player that
+                # is a little behind does not 404 on the one it is fetching.
+                "-hls_delete_threshold", "4",
+                "-hls_flags",
+                "delete_segments+append_list+omit_endlist+independent_segments",
+                # append_list continues the media sequence across an ffmpeg
+                # restart; without an epoch start number two runs would reuse
+                # segment names and a cached player would replay old audio.
+                "-hls_start_number_source", "epoch",
+                "-hls_segment_filename", str(out / "seg_%09d.ts"),
+                str(out / "index.m3u8"),
+            ]
+        return args
+
+    # ---------- ffmpeg ----------
+
     def _command(self) -> list[str]:
-        return [
+        base = [
             ffmpeg_bin(), "-hide_banner", "-loglevel", "warning",
             # Tracks arrive already placed on one continuous timeline by
             # _write_one, so nothing here has to repair them.
             "-re",
             "-f", "mpegts", "-i", "pipe:0",
+        ]
+        if self._is_hls():
+            return base + self._hls_outputs()
+        return base + [
             "-c", "copy",
             "-f", "flv", "-flvflags", "no_duration_filesize",
             "-rw_timeout", "15000000",
@@ -471,12 +597,16 @@ class ChannelStreamer:
         if not ffmpeg_bin():
             self.log("ffmpeg not found -- run ./live validate")
             return 2
-        try:
-            self._rtmp_url()
-        except RuntimeError as exc:
-            self.log(str(exc))
-            self._write_status("failed", str(exc))
-            return 3
+        if self._is_hls():
+            self._write_master()
+            self.log(f"publishing HLS to {self._hls_dir()}")
+        else:
+            try:
+                self._rtmp_url()
+            except RuntimeError as exc:
+                self.log(str(exc))
+                self._write_status("failed", str(exc))
+                return 3
 
         threading.Thread(target=self._builder, daemon=True).start()
 
@@ -515,7 +645,7 @@ class ChannelStreamer:
             feeder = threading.Thread(target=self._feed, args=(self.proc.stdin,),
                                       daemon=True)
             feeder.start()
-            code = self.proc.wait()
+            code = self._wait_with_heartbeat()
             if self.stop_event.is_set():
                 break
 
@@ -535,6 +665,22 @@ class ChannelStreamer:
 
         self._write_status("stopped")
         return 0
+
+    def _wait_with_heartbeat(self) -> int:
+        """Wait for ffmpeg, refreshing the status file while it runs.
+
+        The status used to be written only when something changed, and a single
+        track runs for anything up to half an hour. The website decides the
+        stream is dead from a stale timestamp -- it has to, because a supervisor
+        that was killed leaves its last status behind saying "running" forever.
+        So a healthy stream playing a long surah would show as stopped. The
+        heartbeat is what separates those two cases.
+        """
+        while True:
+            try:
+                return self.proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                self._write_status("running", "streaming")
 
     def shutdown(self, *_args) -> None:
         self.log("shutting down")

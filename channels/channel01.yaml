@@ -3,6 +3,12 @@ name: "channel01"
 title: "القرآن الكريم • المصحف المجود • الشيخ محمد صديق المنشاوي"
 enabled: true
 
+# Shown in the reciter picker on the website. Kept separate from overlay.text
+# (which is burned into the video and sized for a 1280px frame) so the name on
+# the site can be changed without re-rendering a single track.
+reciter: "محمد صدّيق المنشاوي"
+style: "المصحف المجوّد"
+
 # Audio and visuals are deliberately unrelated pools. The engine picks from each
 # independently: the recitation playing has no bearing on what is on screen.
 audio_dir: "assets/audio/minshawi"
@@ -13,9 +19,14 @@ visual_dir: "assets/visuals"
 stream_key_env: "CHANNEL01_STREAM_KEY"
 
 stream:
-  # youtube (no time limit) | facebook (cuts off ~8h) | twitch
-  # Instagram has no public RTMP ingest, so it cannot be streamed to.
-  platform: "youtube"
+  # hls = publish to our own website. youtube | facebook | twitch push to a
+  # platform instead and need stream_key_env set.
+  #
+  # This channel is hls because the YouTube channel took a strike: a platform
+  # can end the broadcast at any moment and there is nothing in this codebase
+  # that can prevent it. Serving the segments ourselves means the recitation
+  # stops only when we stop it.
+  platform: "hls"
 
 # Any .ttf in assets/fonts. Swap the file, rebuild, and the caption restyles.
 font: "assets/fonts/ArefRuqaa-Regular.ttf"

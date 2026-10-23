@@ -3,7 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>لوحة التحكم — quran-live</title>
+<title>لوحة التحكم — القرآن الكريم</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Cairo:wght@400;600;700&display=swap">
 <style>
   /* ---------------------------------------------------------------- tokens */
   :root {
@@ -33,6 +36,30 @@
     --pad: 16px;
 
     --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+    /* Repainted to match quran.run.place: the same deep green ground and gold
+       accent, so the panel reads as the back of the same site rather than a
+       different tool that happens to control it. Only these tokens change --
+       every rule below is untouched. */
+    --bg:        #0b1410;
+    --surface:   #11201a;
+    --surface-2: #16281f;
+    --sunken:    #070f0c;
+    --line:      #1e332a;
+    --line-soft: #172a22;
+
+    --ink:       #e9f0ea;
+    --ink-dim:   #93a79a;
+    --ink-faint: #5e7268;
+
+    --brand:     #c9a227;
+    --brand-ink: #0b1410;
+    --brand-bg:  #1b1a10;
+
+    --warn:      #d9a441;
+    --warn-bg:   #33280f;
+    --bad:       #e0605c;
+    --bad-bg:    #3a1a1a;
   }
 
   * { box-sizing: border-box; }
@@ -407,6 +434,11 @@
 const $ = s => document.querySelector(s);
 const TOKEN = new URLSearchParams(location.search).get("token") || "";
 
+// "" at the root, "/admin" when published under a prefix. Taken from the page's
+// own URL rather than configured, so nginx can move it without a code change.
+const BASE = location.pathname.replace(/\/[^/]*$/, "");
+const url = (path) => BASE + path;
+
 /** el("div.cls#id", {attrs}, [children|string]) -> HTMLElement */
 function el(spec, attrs, kids) {
   const [head, ...classes] = String(spec).split(".");
@@ -477,7 +509,7 @@ function confirmBox({ title, body, name, verb = "تأكيد", danger = true }) {
 /* -------------------------------------------------------------------- api */
 async function api(path, opts = {}) {
   const o = { ...opts, headers: { ...(opts.headers || {}), ...(TOKEN ? { "X-Token": TOKEN } : {}) } };
-  const r = await fetch(path, o);
+  const r = await fetch(url(path), o);
   const body = await r.json().catch(() => ({ error: r.statusText }));
   if (!r.ok) throw new Error(body.error || r.statusText);
   return body;
@@ -620,8 +652,9 @@ function attachConsole(id, pre) {
   const entry = { pre, source: null };
   consoles.set(id, entry);
 
-  const url = `/api/jobs/${encodeURIComponent(id)}/events` + (TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : "");
-  const src = new EventSource(url);
+  const endpoint = url(`/api/jobs/${encodeURIComponent(id)}/events`)
+    + (TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : "");
+  const src = new EventSource(endpoint);
   entry.source = src;
 
   src.addEventListener("line", ev => {
@@ -814,7 +847,7 @@ function put(file, folder, ui) {
     const path = `/api/media/${kind}/` +
       (folder ? encodeURIComponent(folder) + "/" : "") + encodeURIComponent(file.name);
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", path);
+    xhr.open("POST", url(path));
     if (TOKEN) xhr.setRequestHeader("X-Token", TOKEN);
     xhr.upload.onprogress = ev => { if (ev.lengthComputable) ui.progress(ev.loaded / ev.total); };
     xhr.onload = () => {
